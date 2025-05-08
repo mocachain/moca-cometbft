@@ -927,10 +927,10 @@ github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9dec
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 github.com/yuin/goldmark v1.4.1/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
-github.com/zkMeLabs/mechain-cometbft-db v0.8.1-alpha.1 h1:nq2MtEW59EqqqvV/Diarxxc5K9LJj3a21273xvpPJpw=
-github.com/zkMeLabs/mechain-cometbft-db v0.8.1-alpha.1/go.mod h1:ey1CiK4bYo1RBNJLRiVbYr5CMdSxci9S/AZRINLtppI=
-github.com/zkMeLabs/polygon-edge v1.3.3-mechain.1 h1:7oXZzLBo/V2/VvLONe0vyh3uwcMf9Znuz2cp77I1hAc=
-github.com/zkMeLabs/polygon-edge v1.3.3-mechain.1/go.mod h1:bDvHrg7QQKSx31K588TEWgHICl5dCPkotffzK9CE6IE=
+github.com/zkMeLabs/moca-cometbft-db v0.8.1-alpha.1 h1:Zdq2t/aM2J8MdRsgNGnvUNKbTxHv+IKwfApAjlrhSRU=
+github.com/zkMeLabs/moca-cometbft-db v0.8.1-alpha.1/go.mod h1:ey1CiK4bYo1RBNJLRiVbYr5CMdSxci9S/AZRINLtppI=
+github.com/zkMeLabs/polygon-edge v1.3.3-moca.1 h1:M+3b3w2qWjVw9ZKA+WwkRDmloZYmGgeozXMuMsggyk0=
+github.com/zkMeLabs/polygon-edge v1.3.3-moca.1/go.mod h1:bDvHrg7QQKSx31K588TEWgHICl5dCPkotffzK9CE6IE=
 gitlab.com/bosi/decorder v0.2.3 h1:gX4/RgK16ijY8V+BRQHAySfQAb354T7/xQpDB2n10P0=
 gitlab.com/bosi/decorder v0.2.3/go.mod h1:9K1RB5+VPNQYtXtTDAzd2OEftsZb1oV0IrJrzChSdGE=
 go.etcd.io/bbolt v1.3.9 h1:8x7aARPEXiXbHmtUwAIv7eV2fQFHrLLavdiJ3uzJXoI=

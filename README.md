@@ -1,7 +1,7 @@
-# Mechain CometBFT
+# Moca CometBFT
 
-Mechain CometBFT, forked from [CometBFT](https://github.com/cometbft/cometbft),
-is the consensus layer of Mechain blockchain.
+Moca CometBFT, forked from [CometBFT](https://github.com/cometbft/cometbft),
+is the consensus layer of Moca blockchain.
 CometBFT is a Byzantine Fault Tolerant (BFT) middleware that takes a
 state transition machine - written in any programming language - and securely
 replicates it on many machines.
@@ -23,7 +23,7 @@ for any bug bounty. We advise you to be careful and experiment on the network at
 We implement several key features based on the CometBFT fork:
 
 * Vote Pool. Vote pool is used to collect votes from different validators for off-chain consensus.
-Currently, it is mainly used for cross chain and data availability challenge in Mechain blockchain.
+Currently, it is mainly used for cross chain and data availability challenge in Moca blockchain.
 * RANDAO. RANDAO is introduced for on-chain randomness. Overall, the idea is very similar to the RANDAO
 in Ethereum beacon chain, you can refer to [here](https://eth2book.info/altair/part2/building_blocks/randomness)
 for more information. It has some limitations, please use it with caution.
@@ -31,7 +31,7 @@ for more information. It has some limitations, please use it with caution.
 ## Minimum requirements
 
 | Requirement | Notes             |
-|-------------|-------------------|
+| ----------- | ----------------- |
 | Go version  | Go 1.20 or higher |
 
 ### Install
@@ -78,11 +78,11 @@ yourself with our [Architectural Decision Records
 
 ## License
 
-The Mechain CometBFT library (i.e. all code outside the `cmd` directory) is licensed under the
+The Moca CometBFT library (i.e. all code outside the `cmd` directory) is licensed under the
 [GNU Lesser General Public License v3.0](https://www.gnu.org/licenses/lgpl-3.0.en.html),
 also included in our repository in the `COPYING.LESSER` file.
 
-The Mechain CometBFT binaries (i.e. all code inside the `cmd` directory) is licensed under the
+The Moca CometBFT binaries (i.e. all code inside the `cmd` directory) is licensed under the
 [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.en.html), also
 included in our repository in the `COPYING` file.
 
