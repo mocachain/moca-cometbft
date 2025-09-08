@@ -16,7 +16,6 @@ func main() {
 	rootCmd.AddCommand(
 		cmd.GenValidatorCmd,
 		cmd.InitFilesCmd,
-		cmd.ProbeUpnpCmd,
 		cmd.LightCmd,
 		cmd.ReplayCmd,
 		cmd.ReplayConsoleCmd,
@@ -30,6 +29,7 @@ func main() {
 		cmd.VersionCmd,
 		cmd.RollbackStateCmd,
 		cmd.CompactGoLevelDBCmd,
+		cmd.InspectCmd,
 		debug.DebugCmd,
 		cli.NewCompletionCmd(rootCmd, true),
 	)

@@ -1,10 +1,9 @@
 # We need to build in a Linux environment to support C libraries, e.g. RocksDB.
 # We use Debian instead of Alpine, so that we can use binary database packages
 # instead of spending time compiling them.
-FROM golang:1.20-bullseye
+FROM cometbft/cometbft-db-testing:v0.11.0
 
 RUN apt-get -qq update -y && apt-get -qq upgrade -y >/dev/null
-RUN apt-get -qq install -y libleveldb-dev librocksdb-dev zlib1g-dev libsnappy-dev liblz4-dev libzstd-dev >/dev/null
 
 # Set up build directory /src/cometbft
 ENV COMETBFT_BUILD_OPTIONS badgerdb,boltdb,cleveldb,rocksdb
@@ -25,6 +24,7 @@ RUN cd test/e2e && make node && cp build/node /usr/bin/app
 WORKDIR /cometbft
 VOLUME /cometbft
 ENV CMTHOME=/cometbft
+ENV GORACE "halt_on_error=1"
 
 EXPOSE 26656 26657 26660 6060
 ENTRYPOINT ["/usr/bin/entrypoint"]

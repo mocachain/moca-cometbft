@@ -15,7 +15,7 @@ var routes = map[string]*rpcserver.RPCFunc{
 	"hello_world": rpcserver.NewRPCFunc(HelloWorld, "name,num"),
 }
 
-func HelloWorld(ctx *rpctypes.Context, name string, num int) (Result, error) {
+func HelloWorld(_ *rpctypes.Context, name string, num int) (Result, error) {
 	return Result{fmt.Sprintf("hi %s %d", name, num)}, nil
 }
 
@@ -34,7 +34,7 @@ func main() {
 
 	rpcserver.RegisterRPCFuncs(mux, routes, logger)
 	config := rpcserver.DefaultConfig()
-	listener, err := rpcserver.Listen("tcp://127.0.0.1:8008", config)
+	listener, err := rpcserver.Listen("tcp://127.0.0.1:8008", config.MaxOpenConnections)
 	if err != nil {
 		cmtos.Exit(err.Error())
 	}

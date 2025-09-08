@@ -5,6 +5,7 @@ package mocks
 import (
 	context "context"
 
+	log "github.com/cometbft/cometbft/libs/log"
 	mock "github.com/stretchr/testify/mock"
 
 	query "github.com/cometbft/cometbft/libs/pubsub/query"
@@ -38,6 +39,10 @@ func (_m *TxIndexer) Get(hash []byte) (*types.TxResult, error) {
 	ret := _m.Called(hash)
 
 	var r0 *types.TxResult
+	var r1 error
+	if rf, ok := ret.Get(0).(func([]byte) (*types.TxResult, error)); ok {
+		return rf(hash)
+	}
 	if rf, ok := ret.Get(0).(func([]byte) *types.TxResult); ok {
 		r0 = rf(hash)
 	} else {
@@ -46,7 +51,6 @@ func (_m *TxIndexer) Get(hash []byte) (*types.TxResult, error) {
 		}
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func([]byte) error); ok {
 		r1 = rf(hash)
 	} else {
@@ -75,6 +79,10 @@ func (_m *TxIndexer) Search(ctx context.Context, q *query.Query) ([]*types.TxRes
 	ret := _m.Called(ctx, q)
 
 	var r0 []*types.TxResult
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *query.Query) ([]*types.TxResult, error)); ok {
+		return rf(ctx, q)
+	}
 	if rf, ok := ret.Get(0).(func(context.Context, *query.Query) []*types.TxResult); ok {
 		r0 = rf(ctx, q)
 	} else {
@@ -83,7 +91,6 @@ func (_m *TxIndexer) Search(ctx context.Context, q *query.Query) ([]*types.TxRes
 		}
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func(context.Context, *query.Query) error); ok {
 		r1 = rf(ctx, q)
 	} else {
@@ -91,6 +98,11 @@ func (_m *TxIndexer) Search(ctx context.Context, q *query.Query) ([]*types.TxRes
 	}
 
 	return r0, r1
+}
+
+// SetLogger provides a mock function with given fields: l
+func (_m *TxIndexer) SetLogger(l log.Logger) {
+	_m.Called(l)
 }
 
 type mockConstructorTestingTNewTxIndexer interface {

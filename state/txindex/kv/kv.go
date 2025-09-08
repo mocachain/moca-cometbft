@@ -4,25 +4,31 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
 	"strings"
+
+	"github.com/cometbft/cometbft/libs/log"
 
 	"github.com/cosmos/gogoproto/proto"
 
 	dbm "github.com/cometbft/cometbft-db"
 
 	abci "github.com/cometbft/cometbft/abci/types"
+	idxutil "github.com/cometbft/cometbft/internal/indexer"
 	"github.com/cometbft/cometbft/libs/pubsub/query"
+	"github.com/cometbft/cometbft/libs/pubsub/query/syntax"
 	"github.com/cometbft/cometbft/state/indexer"
 	"github.com/cometbft/cometbft/state/txindex"
 	"github.com/cometbft/cometbft/types"
 )
 
 const (
-	tagKeySeparator   = "/"
-	eventSeqSeparator = "$es$"
+	tagKeySeparator     = "/"
+	tagKeySeparatorRune = '/'
+	eventSeqSeparator   = "$es$"
 )
 
 var _ txindex.TxIndexer = (*TxIndex)(nil)
@@ -43,6 +49,7 @@ type TxIndex struct {
 	// Number the events in the event list
 	eventSeq int64
 
+	log log.Logger
 	// whether to disable indexing events
 	disableIndexEvent bool
 }
@@ -57,6 +64,10 @@ func NewTxIndex(store dbm.DB, opts ...NewTxIndexerOption) *TxIndex {
 		opt(txi)
 	}
 	return txi
+}
+
+func (txi *TxIndex) SetLogger(l log.Logger) {
+	txi.log = l
 }
 
 // Get gets transaction from the TxIndex storage and returns it or nil if the
@@ -231,10 +242,7 @@ func (txi *TxIndex) Search(ctx context.Context, q *query.Query) ([]*abci.TxResul
 	filteredHashes := make(map[string][]byte)
 
 	// get a list of conditions (like "tx.height > 5")
-	conditions, err := q.Conditions()
-	if err != nil {
-		return nil, fmt.Errorf("error during parsing conditions from query: %w", err)
-	}
+	conditions := q.Syntax()
 
 	// if there is a hash condition, return the result immediately
 	hash, ok, err := lookForHash(conditions)
@@ -343,19 +351,19 @@ RESULTS_LOOP:
 	return results, nil
 }
 
-func lookForHash(conditions []query.Condition) (hash []byte, ok bool, err error) {
+func lookForHash(conditions []syntax.Condition) (hash []byte, ok bool, err error) {
 	for _, c := range conditions {
-		if c.CompositeKey == types.TxHashKey {
-			decoded, err := hex.DecodeString(c.Operand.(string))
+		if c.Tag == types.TxHashKey {
+			decoded, err := hex.DecodeString(c.Arg.Value())
 			return decoded, true, err
 		}
 	}
 	return
 }
 
-func (txi *TxIndex) setTmpHashes(tmpHeights map[string][]byte, it dbm.Iterator) {
-	eventSeq := extractEventSeqFromKey(it.Key())
-	tmpHeights[string(it.Value())+eventSeq] = it.Value()
+func (*TxIndex) setTmpHashes(tmpHeights map[string][]byte, key, value []byte) {
+	eventSeq := extractEventSeqFromKey(key)
+	tmpHeights[string(value)+eventSeq] = value
 }
 
 // match returns all matching txs by hash that meet a given condition and start
@@ -365,7 +373,7 @@ func (txi *TxIndex) setTmpHashes(tmpHeights map[string][]byte, it dbm.Iterator) 
 // NOTE: filteredHashes may be empty if no previous condition has matched.
 func (txi *TxIndex) match(
 	ctx context.Context,
-	c query.Condition,
+	c syntax.Condition,
 	startKeyBz []byte,
 	filteredHashes map[string][]byte,
 	firstRun bool,
@@ -379,8 +387,8 @@ func (txi *TxIndex) match(
 
 	tmpHashes := make(map[string][]byte)
 
-	switch c.Op {
-	case query.OpEqual:
+	switch {
+	case c.Op == syntax.TEq:
 		it, err := dbm.IteratePrefix(txi.store, startKeyBz)
 		if err != nil {
 			panic(err)
@@ -392,12 +400,21 @@ func (txi *TxIndex) match(
 
 			// If we have a height range in a query, we need only transactions
 			// for this height
-			keyHeight, err := extractHeightFromKey(it.Key())
-			if err != nil || !checkHeightConditions(heightInfo, keyHeight) {
+			key := it.Key()
+			keyHeight, err := extractHeightFromKey(key)
+			if err != nil {
+				txi.log.Error("failure to parse height from key:", err)
 				continue
 			}
-
-			txi.setTmpHashes(tmpHashes, it)
+			withinBounds, err := checkHeightConditions(heightInfo, keyHeight)
+			if err != nil {
+				txi.log.Error("failure checking for height bounds:", err)
+				continue
+			}
+			if !withinBounds {
+				continue
+			}
+			txi.setTmpHashes(tmpHashes, key, it.Value())
 			// Potentially exit early.
 			select {
 			case <-ctx.Done():
@@ -409,10 +426,10 @@ func (txi *TxIndex) match(
 			panic(err)
 		}
 
-	case query.OpExists:
+	case c.Op == syntax.TExists:
 		// XXX: can't use startKeyBz here because c.Operand is nil
 		// (e.g. "account.owner/<nil>/" won't match w/ a single row)
-		it, err := dbm.IteratePrefix(txi.store, startKey(c.CompositeKey))
+		it, err := dbm.IteratePrefix(txi.store, startKey(c.Tag))
 		if err != nil {
 			panic(err)
 		}
@@ -420,11 +437,21 @@ func (txi *TxIndex) match(
 
 	EXISTS_LOOP:
 		for ; it.Valid(); it.Next() {
-			keyHeight, err := extractHeightFromKey(it.Key())
-			if err != nil || !checkHeightConditions(heightInfo, keyHeight) {
+			key := it.Key()
+			keyHeight, err := extractHeightFromKey(key)
+			if err != nil {
+				txi.log.Error("failure to parse height from key:", err)
 				continue
 			}
-			txi.setTmpHashes(tmpHashes, it)
+			withinBounds, err := checkHeightConditions(heightInfo, keyHeight)
+			if err != nil {
+				txi.log.Error("failure checking for height bounds:", err)
+				continue
+			}
+			if !withinBounds {
+				continue
+			}
+			txi.setTmpHashes(tmpHashes, key, it.Value())
 
 			// Potentially exit early.
 			select {
@@ -437,11 +464,11 @@ func (txi *TxIndex) match(
 			panic(err)
 		}
 
-	case query.OpContains:
+	case c.Op == syntax.TContains:
 		// XXX: startKey does not apply here.
 		// For example, if startKey = "account.owner/an/" and search query = "account.owner CONTAINS an"
 		// we can't iterate with prefix "account.owner/an/" because we might miss keys like "account.owner/Ulan/"
-		it, err := dbm.IteratePrefix(txi.store, startKey(c.CompositeKey))
+		it, err := dbm.IteratePrefix(txi.store, startKey(c.Tag))
 		if err != nil {
 			panic(err)
 		}
@@ -453,12 +480,22 @@ func (txi *TxIndex) match(
 				continue
 			}
 
-			if strings.Contains(extractValueFromKey(it.Key()), c.Operand.(string)) {
-				keyHeight, err := extractHeightFromKey(it.Key())
-				if err != nil || !checkHeightConditions(heightInfo, keyHeight) {
+			if strings.Contains(extractValueFromKey(it.Key()), c.Arg.Value()) {
+				key := it.Key()
+				keyHeight, err := extractHeightFromKey(key)
+				if err != nil {
+					txi.log.Error("failure to parse height from key:", err)
 					continue
 				}
-				txi.setTmpHashes(tmpHashes, it)
+				withinBounds, err := checkHeightConditions(heightInfo, keyHeight)
+				if err != nil {
+					txi.log.Error("failure checking for height bounds:", err)
+					continue
+				}
+				if !withinBounds {
+					continue
+				}
+				txi.setTmpHashes(tmpHashes, key, it.Value())
 			}
 
 			// Potentially exit early.
@@ -532,29 +569,55 @@ func (txi *TxIndex) matchRange(
 		panic(err)
 	}
 	defer it.Close()
+	bigIntValue := new(big.Int)
 
 LOOP:
 	for ; it.Valid(); it.Next() {
-		if !isTagKey(it.Key()) {
+		// TODO: We need to make a function for getting it.Key() as a byte slice with no copies.
+		// It currently copies the source data (which can change on a subsequent .Next() call) but that
+		// is not an issue for us.
+		key := it.Key()
+		if !isTagKey(key) {
 			continue
 		}
 
-		if _, ok := qr.AnyBound().(*big.Int); ok {
-			v := new(big.Int)
-			eventValue := extractValueFromKey(it.Key())
-			v, ok := v.SetString(eventValue, 10)
+		if _, ok := qr.AnyBound().(*big.Float); ok {
+			value := extractValueFromKey(key)
+			v, ok := bigIntValue.SetString(value, 10)
+			var vF *big.Float
 			if !ok {
-				continue LOOP
-			}
-			if qr.Key != types.TxHeightKey {
-				keyHeight, err := extractHeightFromKey(it.Key())
-				if err != nil || !checkHeightConditions(heightInfo, keyHeight) {
+				vF, _, err = big.ParseFloat(value, 10, 125, big.ToNearestEven)
+				if err != nil {
 					continue LOOP
 				}
 
 			}
-			if checkBounds(qr, v) {
-				txi.setTmpHashes(tmpHashes, it)
+			if qr.Key != types.TxHeightKey {
+				keyHeight, err := extractHeightFromKey(key)
+				if err != nil {
+					txi.log.Error("failure to parse height from key:", err)
+					continue
+				}
+				withinBounds, err := checkHeightConditions(heightInfo, keyHeight)
+				if err != nil {
+					txi.log.Error("failure checking for height bounds:", err)
+					continue
+				}
+				if !withinBounds {
+					continue
+				}
+			}
+			var withinBounds bool
+			var err error
+			if !ok {
+				withinBounds, err = idxutil.CheckBounds(qr, vF)
+			} else {
+				withinBounds, err = idxutil.CheckBounds(qr, v)
+			}
+			if err != nil {
+				txi.log.Error("failed to parse bounds:", err)
+			} else if withinBounds {
+				txi.setTmpHashes(tmpHashes, key, it.Value())
 			}
 
 			// XXX: passing time in a ABCI Events is not yet implemented
@@ -614,29 +677,62 @@ func isTagKey(key []byte) bool {
 	// tags should 4. Alternatively it should be 3 if the event was not indexed
 	// with the corresponding event sequence. However, some attribute values in
 	// production can contain the tag separator. Therefore, the condition is >= 3.
-	numTags := strings.Count(string(key), tagKeySeparator)
-	return numTags >= 3
+	numTags := 0
+	for i := 0; i < len(key); i++ {
+		if key[i] == tagKeySeparatorRune {
+			numTags++
+			if numTags >= 3 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func extractHeightFromKey(key []byte) (int64, error) {
-	parts := strings.SplitN(string(key), tagKeySeparator, -1)
-
-	return strconv.ParseInt(parts[len(parts)-2], 10, 64)
-}
-func extractValueFromKey(key []byte) string {
-	keyString := string(key)
-	parts := strings.SplitN(keyString, tagKeySeparator, -1)
-	partsLen := len(parts)
-	value := strings.TrimPrefix(keyString, parts[0]+tagKeySeparator)
-
-	suffix := ""
-	suffixLen := 2
-
-	for i := 1; i <= suffixLen; i++ {
-		suffix = tagKeySeparator + parts[partsLen-i] + suffix
+	// the height is the second last element in the key.
+	// Find the position of the last occurrence of tagKeySeparator
+	endPos := bytes.LastIndexByte(key, tagKeySeparatorRune)
+	if endPos == -1 {
+		return 0, errors.New("separator not found")
 	}
-	return strings.TrimSuffix(value, suffix)
 
+	// Find the position of the second last occurrence of tagKeySeparator
+	startPos := bytes.LastIndexByte(key[:endPos-1], tagKeySeparatorRune)
+	if startPos == -1 {
+		return 0, errors.New("second last separator not found")
+	}
+
+	// Extract the height part of the key
+	height, err := strconv.ParseInt(string(key[startPos+1:endPos]), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return height, nil
+}
+
+func extractValueFromKey(key []byte) string {
+	// Find the positions of tagKeySeparator in the byte slice
+	var indices []int
+	for i, b := range key {
+		if b == tagKeySeparatorRune {
+			indices = append(indices, i)
+		}
+	}
+
+	// If there are less than 2 occurrences of tagKeySeparator, return an empty string
+	if len(indices) < 2 {
+		return ""
+	}
+
+	// Extract the value between the first and second last occurrence of tagKeySeparator
+	value := key[indices[0]+1 : indices[len(indices)-2]]
+
+	// Trim any leading or trailing whitespace
+	value = bytes.TrimSpace(value)
+
+	// TODO: Do an unsafe cast to avoid an extra allocation here
+	return string(value)
 }
 
 func extractEventSeqFromKey(key []byte) string {
@@ -649,6 +745,7 @@ func extractEventSeqFromKey(key []byte) string {
 	}
 	return "0"
 }
+
 func keyForEvent(key string, value string, result *abci.TxResult, eventSeq int64) []byte {
 	return []byte(fmt.Sprintf("%s/%s/%d/%d%s",
 		key,
@@ -671,11 +768,11 @@ func keyForHeight(result *abci.TxResult) []byte {
 	))
 }
 
-func startKeyForCondition(c query.Condition, height int64) []byte {
+func startKeyForCondition(c syntax.Condition, height int64) []byte {
 	if height > 0 {
-		return startKey(c.CompositeKey, c.Operand, height)
+		return startKey(c.Tag, c.Arg.Value(), height)
 	}
-	return startKey(c.CompositeKey, c.Operand)
+	return startKey(c.Tag, c.Arg.Value())
 }
 
 func startKey(fields ...interface{}) []byte {
@@ -684,29 +781,4 @@ func startKey(fields ...interface{}) []byte {
 		b.Write([]byte(fmt.Sprintf("%v", f) + tagKeySeparator))
 	}
 	return b.Bytes()
-}
-
-func checkBounds(ranges indexer.QueryRange, v *big.Int) bool {
-	include := true
-	lowerBound := ranges.LowerBoundValue()
-	upperBound := ranges.UpperBoundValue()
-	if lowerBound != nil && v.Cmp(lowerBound.(*big.Int)) == -1 {
-		include = false
-	}
-
-	if upperBound != nil && v.Cmp(upperBound.(*big.Int)) == 1 {
-		include = false
-	}
-
-	return include
-}
-
-//nolint:unused,deadcode
-func lookForHeight(conditions []query.Condition) (height int64) {
-	for _, c := range conditions {
-		if c.CompositeKey == types.TxHeightKey && c.Op == query.OpEqual {
-			return c.Operand.(int64)
-		}
-	}
-	return 0
 }

@@ -103,7 +103,7 @@ var PB2TM = pb2tm{}
 type pb2tm struct{}
 
 func (pb2tm) ValidatorUpdates(vals []abci.ValidatorUpdate) ([]*Validator, error) {
-	tmVals := make([]*Validator, len(vals))
+	cmtVals := make([]*Validator, len(vals))
 	for i, v := range vals {
 		pub, err := cryptoenc.PubKeyFromProto(v.PubKey)
 		if err != nil {
@@ -112,7 +112,7 @@ func (pb2tm) ValidatorUpdates(vals []abci.ValidatorUpdate) ([]*Validator, error)
 		updated := NewValidator(pub, v.Power)
 		updated.SetBlsKey(v.BlsKey)
 		updated.SetRelayerAddress(v.RelayerAddress)
-		tmVals[i] = updated
+		cmtVals[i] = updated
 	}
-	return tmVals, nil
+	return cmtVals, nil
 }

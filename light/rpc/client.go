@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/cometbft/cometbft/votepool"
-
-	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto/merkle"
 	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
 	cmtmath "github.com/cometbft/cometbft/libs/math"
@@ -18,6 +16,7 @@ import (
 	rpcclient "github.com/cometbft/cometbft/rpc/client"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	"github.com/cometbft/cometbft/state"
 	"github.com/cometbft/cometbft/types"
 )
 
@@ -379,6 +378,7 @@ func (c *Client) BlockByHash(ctx context.Context, hash []byte) (*ctypes.ResultBl
 
 // BlockResults returns the block results for the given height. If no height is
 // provided, the results of the block preceding the latest are returned.
+// NOTE: Light client only verifies the tx results
 func (c *Client) BlockResults(ctx context.Context, height *int64) (*ctypes.ResultBlockResults, error) {
 	var h int64
 	if height == nil {
@@ -410,13 +410,8 @@ func (c *Client) BlockResults(ctx context.Context, height *int64) (*ctypes.Resul
 		return nil, err
 	}
 
-	// Build a Merkle tree of proto-encoded DeliverTx results and get a hash.
-	results := types.NewResults(&abci.ResponseBeginBlock{ExtraData: res.BeginBlockExtraData},
-		res.TxsResults,
-		&abci.ResponseEndBlock{ExtraData: res.EndBlockExtraData})
-
 	// Build a Merkle tree out of the above 3 binary slices.
-	rH := results.Hash()
+	rH := state.TxResultsHash(res.TxsResults)
 
 	// Verify block results.
 	if !bytes.Equal(rH, trustedBlock.LastResultsHash) {

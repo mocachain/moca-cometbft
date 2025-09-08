@@ -30,10 +30,7 @@ func ExampleClient_Update() {
 	}
 	defer os.RemoveAll(dbDir)
 
-	var (
-		config  = rpctest.GetConfig()
-		chainID = config.ChainID()
-	)
+	config := rpctest.GetConfig()
 
 	primary, err := httpp.New(chainID, config.RPC.ListenAddress)
 	if err != nil {
@@ -98,10 +95,7 @@ func ExampleClient_VerifyLightBlockAtHeight() {
 	}
 	defer os.RemoveAll(dbDir)
 
-	var (
-		config  = rpctest.GetConfig()
-		chainID = config.ChainID()
-	)
+	config := rpctest.GetConfig()
 
 	primary, err := httpp.New(chainID, config.RPC.ListenAddress)
 	if err != nil {
@@ -156,7 +150,7 @@ func ExampleClient_VerifyLightBlockAtHeight() {
 
 func TestMain(m *testing.M) {
 	// start a CometBFT node (and kvstore) in the background to test against
-	app := kvstore.NewApplication()
+	app := kvstore.NewInMemoryApplication()
 	node := rpctest.StartTendermint(app, rpctest.SuppressStdout)
 
 	code := m.Run()

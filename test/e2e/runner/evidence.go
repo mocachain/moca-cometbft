@@ -25,7 +25,7 @@ import (
 // 1 in 4 evidence is light client evidence, the rest is duplicate vote evidence
 const lightClientEvidenceRatio = 4
 
-// InjectEvidence takes a running testnet and generates an amount of valid
+// InjectEvidence takes a running testnet and generates an amount of valid/invalid
 // evidence and broadcasts it to a random node through the rpc endpoint `/broadcast_evidence`.
 // Evidence is random and can be a mixture of LightClientAttackEvidence and
 // DuplicateVoteEvidence.
@@ -82,35 +82,54 @@ func InjectEvidence(ctx context.Context, r *rand.Rand, testnet *e2e.Testnet, amo
 
 	// wait for the node to reach the height above the forged height so that
 	// it is able to validate the evidence
-	_, err = waitForNode(targetNode, waitHeight, time.Minute)
+	_, err = waitForNode(ctx, targetNode, waitHeight, time.Minute)
 	if err != nil {
 		return err
 	}
 
 	var ev types.Evidence
-	for i := 1; i <= amount; i++ {
+	for i := 0; i < amount; i++ {
+		validEv := true
 		if i%lightClientEvidenceRatio == 0 {
+			validEv = i%(lightClientEvidenceRatio*2) != 0 // Alternate valid and invalid evidence
 			ev, err = generateLightClientAttackEvidence(
-				ctx, privVals, evidenceHeight, valSet, testnet.Name, blockRes.Block.Time,
+				ctx, privVals, evidenceHeight, valSet, testnet.Name, blockRes.Block.Time, validEv,
 			)
 		} else {
-			ev, err = generateDuplicateVoteEvidence(
-				ctx, privVals, evidenceHeight, valSet, testnet.Name, blockRes.Block.Time,
+			var dve *types.DuplicateVoteEvidence
+			dve, err = generateDuplicateVoteEvidence(
+				privVals, evidenceHeight, valSet, testnet.Name, blockRes.Block.Time,
 			)
+			if dve.VoteA.Height < testnet.VoteExtensionsEnableHeight {
+				dve.VoteA.Extension = nil
+				dve.VoteA.ExtensionSignature = nil
+				dve.VoteB.Extension = nil
+				dve.VoteB.ExtensionSignature = nil
+			}
+			ev = dve
 		}
 		if err != nil {
 			return err
 		}
 
 		_, err := client.BroadcastEvidence(ctx, ev)
-		if err != nil {
+		if !validEv {
+			// The tests will count committed evidences later on,
+			// and only valid evidences will make it
+			amount++
+		}
+		if validEv != (err == nil) {
+			if err == nil {
+				return errors.New("submitting invalid evidence didn't return an error")
+			}
 			return err
 		}
+		time.Sleep(5 * time.Second / time.Duration(amount))
 	}
 
 	// wait for the node to reach the height above the forged height so that
 	// it is able to validate the evidence
-	_, err = waitForNode(targetNode, blockRes.Block.Height+2, 30*time.Second)
+	_, err = waitForNode(ctx, targetNode, blockRes.Block.Height+2, 30*time.Second)
 	if err != nil {
 		return err
 	}
@@ -148,6 +167,7 @@ func generateLightClientAttackEvidence(
 	vals *types.ValidatorSet,
 	chainID string,
 	evTime time.Time,
+	validEvidence bool,
 ) (*types.LightClientAttackEvidence, error) {
 	// forge a random header
 	forgedHeight := height + 2
@@ -157,7 +177,7 @@ func generateLightClientAttackEvidence(
 
 	// add a new bogus validator and remove an existing one to
 	// vary the validator set slightly
-	pv, conflictingVals, err := mutateValidatorSet(ctx, privVals, vals)
+	pv, conflictingVals, err := mutateValidatorSet(ctx, privVals, vals, !validEvidence)
 	if err != nil {
 		return nil, err
 	}
@@ -170,6 +190,11 @@ func generateLightClientAttackEvidence(
 	commit, err := test.MakeCommitFromVoteSet(blockID, voteSet, pv, forgedTime)
 	if err != nil {
 		return nil, err
+	}
+
+	// malleate the last signature of the commit by adding one to its first byte
+	if !validEvidence {
+		commit.Signatures[len(commit.Signatures)-1].Signature[0]++
 	}
 
 	ev := &types.LightClientAttackEvidence{
@@ -193,7 +218,6 @@ func generateLightClientAttackEvidence(
 // generateDuplicateVoteEvidence picks a random validator from the val set and
 // returns duplicate vote evidence against the validator
 func generateDuplicateVoteEvidence(
-	ctx context.Context,
 	privVals []types.MockPV,
 	height int64,
 	vals *types.ValidatorSet,
@@ -204,11 +228,11 @@ func generateDuplicateVoteEvidence(
 	if err != nil {
 		return nil, err
 	}
-	voteA, err := test.MakeVote(privVal, chainID, valIdx, height, 0, 2, makeRandomBlockID(), time)
+	voteA, err := types.MakeVote(privVal, chainID, valIdx, height, 0, 2, makeRandomBlockID(), time)
 	if err != nil {
 		return nil, err
 	}
-	voteB, err := test.MakeVote(privVal, chainID, valIdx, height, 0, 2, makeRandomBlockID(), time)
+	voteB, err := types.MakeVote(privVal, chainID, valIdx, height, 0, 2, makeRandomBlockID(), time)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +310,11 @@ func makeBlockID(hash []byte, partSetSize uint32, partSetHash []byte) types.Bloc
 	}
 }
 
-func mutateValidatorSet(ctx context.Context, privVals []types.MockPV, vals *types.ValidatorSet,
+func mutateValidatorSet(
+	ctx context.Context,
+	privVals []types.MockPV,
+	vals *types.ValidatorSet,
+	nop bool,
 ) ([]types.PrivValidator, *types.ValidatorSet, error) {
 	newVal, newPrivVal, err := test.Validator(ctx, 10)
 	if err != nil {
@@ -294,10 +322,14 @@ func mutateValidatorSet(ctx context.Context, privVals []types.MockPV, vals *type
 	}
 
 	var newVals *types.ValidatorSet
-	if vals.Size() > 2 {
-		newVals = types.NewValidatorSet(append(vals.Copy().Validators[:vals.Size()-1], newVal))
+	if nop {
+		newVals = types.NewValidatorSet(vals.Copy().Validators)
 	} else {
-		newVals = types.NewValidatorSet(append(vals.Copy().Validators, newVal))
+		if vals.Size() > 2 {
+			newVals = types.NewValidatorSet(append(vals.Copy().Validators[:vals.Size()-1], newVal))
+		} else {
+			newVals = types.NewValidatorSet(append(vals.Copy().Validators, newVal))
+		}
 	}
 
 	// we need to sort the priv validators with the same index as the validator set

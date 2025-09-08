@@ -13,6 +13,7 @@ import (
 	"github.com/cometbft/cometbft/crypto/ed25519"
 	cryptoenc "github.com/cometbft/cometbft/crypto/encoding"
 	"github.com/cometbft/cometbft/crypto/tmhash"
+	"github.com/cometbft/cometbft/internal/test"
 	cmtrand "github.com/cometbft/cometbft/libs/rand"
 	"github.com/cometbft/cometbft/privval"
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
@@ -117,7 +118,7 @@ func makeEvidences(
 func TestBroadcastEvidence_DuplicateVoteEvidence(t *testing.T) {
 	var (
 		config  = rpctest.GetConfig()
-		chainID = config.ChainID()
+		chainID = test.DefaultTestChainID
 		pv      = privval.LoadOrGenFilePV(config.PrivValidatorKeyFile(), config.PrivValidatorStateFile())
 	)
 

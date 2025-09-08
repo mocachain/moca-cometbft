@@ -97,7 +97,6 @@ func iotest(writer protoio.WriteCloser, reader protoio.ReadCloser) error {
 	if i != size {
 		panic("not enough messages read")
 	}
-
 	return reader.Close()
 }
 

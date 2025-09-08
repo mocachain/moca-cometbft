@@ -239,7 +239,7 @@ func TestPool_SubscribeNewVoteEvent(t *testing.T) {
 		event, ok := msg.Data().(Vote)
 		require.True(t, ok, "Expected event of type Vote, got %T", msg.Data())
 		require.Equal(t, vote1.EventHash, event.EventHash)
-	case <-sub.Cancelled():
+	case <-sub.Canceled():
 		t.Fatalf("sub was canceled (reason: %v)", sub.Err())
 	case <-time.After(1 * time.Second):
 		t.Fatal("Did not receive EventVotePoolUpdates within 1 sec.")

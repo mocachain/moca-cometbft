@@ -39,6 +39,8 @@ func MConnConfig(cfg *config.P2PConfig) conn.MConnConfig {
 	mConfig.SendRate = cfg.SendRate
 	mConfig.RecvRate = cfg.RecvRate
 	mConfig.MaxPacketMsgPayloadSize = cfg.MaxPacketMsgPayloadSize
+	mConfig.TestFuzz = cfg.TestFuzz
+	mConfig.TestFuzzConfig = cfg.TestFuzzConfig
 	return mConfig
 }
 
@@ -263,14 +265,13 @@ func (sw *Switch) OnStop() {
 //---------------------------------------------------------------------
 // Peers
 
-// BroadcastEnvelope runs a go routine for each attempted send, which will block trying
+// Broadcast runs a go routine for each attempted send, which will block trying
 // to send for defaultSendTimeoutSeconds. Returns a channel which receives
 // success values for each attempted send (false if times out). Channel will be
 // closed once msg bytes are sent to all peers (or time out).
-// BroadcastEnvelopes sends to the peers using the SendEnvelope method.
 //
-// NOTE: BroadcastEnvelope uses goroutines, so order of broadcast may not be preserved.
-func (sw *Switch) BroadcastEnvelope(e Envelope) chan bool {
+// NOTE: Broadcast uses goroutines, so order of broadcast may not be preserved.
+func (sw *Switch) Broadcast(e Envelope) chan bool {
 	sw.Logger.Debug("Broadcast", "channel", e.ChannelID)
 
 	peers := sw.peers.List()
@@ -281,7 +282,7 @@ func (sw *Switch) BroadcastEnvelope(e Envelope) chan bool {
 	for _, peer := range peers {
 		go func(p Peer) {
 			defer wg.Done()
-			success := p.SendEnvelope(e)
+			success := p.Send(e)
 			successChan <- success
 		}(peer)
 	}

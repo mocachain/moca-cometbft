@@ -290,7 +290,7 @@ func NewEthRPCSuccessResponse(id jsonrpcid, res interface{}, method string) RPCR
 				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
 			}
 		case EthSendRawTransaction:
-			return RPCInvalidRequestError(id, fmt.Errorf("transfer amoca through EVM wallet on Moca is not available yet, please go to decellar.io or refer to latest docs"))
+			return RPCInvalidRequestError(id, fmt.Errorf("transfer amoca through EVM wallet on MOCA is not available yet, please go to decellar.io or refer to latest docs"))
 		//return int string for net_version
 		case NetVersion:
 			hexStr := hex.EncodeToString(bz)

@@ -135,6 +135,14 @@ func MakeGenesis(testnet *e2e.Testnet) (types.GenesisDoc, error) {
 	}
 	// set the app version to 1
 	genesis.ConsensusParams.Version.App = 1
+	genesis.ConsensusParams.Evidence.MaxAgeNumBlocks = e2e.EvidenceAgeHeight
+	genesis.ConsensusParams.Evidence.MaxAgeDuration = e2e.EvidenceAgeTime
+	if testnet.BlockMaxBytes != 0 {
+		genesis.ConsensusParams.Block.MaxBytes = testnet.BlockMaxBytes
+	}
+	if testnet.VoteExtensionsUpdateHeight == -1 {
+		genesis.ConsensusParams.ABCI.VoteExtensionsEnableHeight = testnet.VoteExtensionsEnableHeight
+	}
 	for validator, power := range testnet.Validators {
 		genesis.Validators = append(genesis.Validators, types.GenesisValidator{
 			Name:    validator.Name,
@@ -169,6 +177,9 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	cfg.P2P.AddrBookStrict = false
 	cfg.DBBackend = node.Database
 	cfg.StateSync.DiscoveryTime = 5 * time.Second
+	cfg.BlockSync.Version = node.BlockSyncVersion
+	cfg.Mempool.ExperimentalMaxGossipConnectionsToNonPersistentPeers = int(node.Testnet.ExperimentalMaxGossipConnectionsToNonPersistentPeers)
+	cfg.Mempool.ExperimentalMaxGossipConnectionsToPersistentPeers = int(node.Testnet.ExperimentalMaxGossipConnectionsToPersistentPeers)
 
 	switch node.ABCIProtocol {
 	case e2e.ProtocolUNIX:
@@ -178,7 +189,7 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	case e2e.ProtocolGRPC:
 		cfg.ProxyApp = AppAddressTCP
 		cfg.ABCI = "grpc"
-	case e2e.ProtocolBuiltin:
+	case e2e.ProtocolBuiltin, e2e.ProtocolBuiltinConnSync:
 		cfg.ProxyApp = ""
 		cfg.ABCI = ""
 	default:
@@ -214,15 +225,6 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 	default:
 		return nil, fmt.Errorf("unexpected mode %q", node.Mode)
 	}
-	if node.Mempool != "" {
-		cfg.Mempool.Version = node.Mempool
-	}
-
-	if node.BlockSync == "" {
-		cfg.BlockSyncMode = false
-	} else {
-		cfg.BlockSync.Version = node.BlockSync
-	}
 
 	if node.StateSync {
 		cfg.StateSync.Enable = true
@@ -253,6 +255,14 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 		cfg.P2P.PersistentPeers += peer.AddressP2P(true)
 	}
 
+	if node.Testnet.LogLevel != "" {
+		cfg.LogLevel = node.Testnet.LogLevel
+	}
+
+	if node.Testnet.LogFormat != "" {
+		cfg.LogFormat = node.Testnet.LogFormat
+	}
+
 	if node.Prometheus {
 		cfg.Instrumentation.Prometheus = true
 	}
@@ -263,19 +273,22 @@ func MakeConfig(node *e2e.Node) (*config.Config, error) {
 // MakeAppConfig generates an ABCI application config for a node.
 func MakeAppConfig(node *e2e.Node) ([]byte, error) {
 	cfg := map[string]interface{}{
-		"chain_id":               node.Testnet.Name,
-		"dir":                    "data/app",
-		"listen":                 AppAddressUNIX,
-		"mode":                   node.Mode,
-		"proxy_port":             node.ProxyPort,
-		"protocol":               "socket",
-		"persist_interval":       node.PersistInterval,
-		"snapshot_interval":      node.SnapshotInterval,
-		"retain_blocks":          node.RetainBlocks,
-		"key_type":               node.PrivvalKey.Type(),
-		"prepare_proposal_delay": node.Testnet.PrepareProposalDelay,
-		"process_proposal_delay": node.Testnet.ProcessProposalDelay,
-		"check_tx_delay":         node.Testnet.CheckTxDelay,
+		"chain_id":                      node.Testnet.Name,
+		"dir":                           "data/app",
+		"listen":                        AppAddressUNIX,
+		"mode":                          node.Mode,
+		"protocol":                      "socket",
+		"persist_interval":              node.PersistInterval,
+		"snapshot_interval":             node.SnapshotInterval,
+		"retain_blocks":                 node.RetainBlocks,
+		"key_type":                      node.PrivvalKey.Type(),
+		"prepare_proposal_delay":        node.Testnet.PrepareProposalDelay,
+		"process_proposal_delay":        node.Testnet.ProcessProposalDelay,
+		"check_tx_delay":                node.Testnet.CheckTxDelay,
+		"vote_extension_delay":          node.Testnet.VoteExtensionDelay,
+		"finalize_block_delay":          node.Testnet.FinalizeBlockDelay,
+		"vote_extensions_enable_height": node.Testnet.VoteExtensionsEnableHeight,
+		"vote_extensions_update_height": node.Testnet.VoteExtensionsUpdateHeight,
 	}
 	switch node.ABCIProtocol {
 	case e2e.ProtocolUNIX:
@@ -285,9 +298,9 @@ func MakeAppConfig(node *e2e.Node) ([]byte, error) {
 	case e2e.ProtocolGRPC:
 		cfg["listen"] = AppAddressTCP
 		cfg["protocol"] = "grpc"
-	case e2e.ProtocolBuiltin:
+	case e2e.ProtocolBuiltin, e2e.ProtocolBuiltinConnSync:
 		delete(cfg, "listen")
-		cfg["protocol"] = "builtin"
+		cfg["protocol"] = string(node.ABCIProtocol)
 	default:
 		return nil, fmt.Errorf("unexpected ABCI protocol setting %q", node.ABCIProtocol)
 	}

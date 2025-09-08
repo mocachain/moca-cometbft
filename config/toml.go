@@ -2,8 +2,6 @@ package config
 
 import (
 	"bytes"
-	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -34,10 +32,10 @@ func EnsureRoot(rootDir string) {
 	if err := cmtos.EnsureDir(rootDir, DefaultDirPerm); err != nil {
 		panic(err.Error())
 	}
-	if err := cmtos.EnsureDir(filepath.Join(rootDir, defaultConfigDir), DefaultDirPerm); err != nil {
+	if err := cmtos.EnsureDir(filepath.Join(rootDir, DefaultConfigDir), DefaultDirPerm); err != nil {
 		panic(err.Error())
 	}
-	if err := cmtos.EnsureDir(filepath.Join(rootDir, defaultDataDir), DefaultDirPerm); err != nil {
+	if err := cmtos.EnsureDir(filepath.Join(rootDir, DefaultDataDir), DefaultDirPerm); err != nil {
 		panic(err.Error())
 	}
 
@@ -76,6 +74,10 @@ const defaultConfigTemplate = `# This is a TOML config file.
 # "$HOME/.cometbft" by default, but could be changed via $CMTHOME env variable
 # or --home cmd flag.
 
+# The version of the CometBFT binary that created or
+# last modified the config file. Do not modify this.
+version = "{{ .BaseConfig.Version }}"
+
 #######################################################################
 ###                   Main Base Config Options                      ###
 #######################################################################
@@ -86,14 +88,6 @@ proxy_app = "{{ .BaseConfig.ProxyApp }}"
 
 # A custom human readable name for this node
 moniker = "{{ .BaseConfig.Moniker }}"
-
-# If this node is many blocks behind the tip of the chain, BlockSync
-# allows them to catchup quickly by downloading blocks in parallel
-# and verifying their commits
-#
-# Deprecated: this key will be removed and BlockSync will be enabled
-# unconditionally in the next major release.
-block_sync = {{ .BaseConfig.BlockSyncMode }}
 
 # Database backend: goleveldb | cleveldb | boltdb | rocksdb | badgerdb
 # * goleveldb (github.com/syndtr/goleveldb - most popular implementation)
@@ -245,6 +239,11 @@ experimental_close_on_slow_client = {{ .RPC.CloseOnSlowClient }}
 # See https://github.com/tendermint/tendermint/issues/3435
 timeout_broadcast_tx_commit = "{{ .RPC.TimeoutBroadcastTxCommit }}"
 
+# Maximum number of requests that can be sent in a batch
+# If the value is set to '0' (zero-value), then no maximum batch size will be
+# enforced for a JSON-RPC batch request.
+max_request_batch_size = {{ .RPC.MaxRequestBatchSize }}
+
 # Maximum size of request body, in bytes
 max_body_bytes = {{ .RPC.MaxBodyBytes }}
 
@@ -277,11 +276,9 @@ pprof_laddr = "{{ .RPC.PprofListenAddress }}"
 # Address to listen for incoming connections
 laddr = "{{ .P2P.ListenAddress }}"
 
-# Address to advertise to peers for them to dial
-# If empty, will use the same port as the laddr,
-# and will introspect on the listener or use UPnP
-# to figure out the address. ip and port are required
-# example: 159.89.10.97:26656
+# Address to advertise to peers for them to dial. If empty, will use the same
+# port as the laddr, and will introspect on the listener to figure out the
+# address. IP and port are required. Example: 159.89.10.97:26656
 external_address = "{{ .P2P.ExternalAddress }}"
 
 # Comma separated list of seed nodes to connect to
@@ -289,9 +286,6 @@ seeds = "{{ .P2P.Seeds }}"
 
 # Comma separated list of nodes to keep persistent connections to
 persistent_peers = "{{ .P2P.PersistentPeers }}"
-
-# UPNP port forwarding
-upnp = {{ .P2P.UPNP }}
 
 # Path to address book
 addr_book_file = "{{ js .P2P.AddrBook }}"
@@ -348,13 +342,45 @@ dial_timeout = "{{ .P2P.DialTimeout }}"
 #######################################################
 [mempool]
 
-# Mempool version to use:
-#   1) "v0" - (default) FIFO mempool.
-#   2) "v1" - prioritized mempool (deprecated; will be removed in the next release).
-version = "{{ .Mempool.Version }}"
+# The type of mempool for this node to use.
+#
+#  Possible types:
+#  - "flood" : concurrent linked list mempool with flooding gossip protocol
+#  (default)
+#  - "nop"   : nop-mempool (short for no operation; the ABCI app is responsible
+#  for storing, disseminating and proposing txs). "create_empty_blocks=false" is
+#  not supported.
+type = "flood"
 
+# Recheck (default: true) defines whether CometBFT should recheck the
+# validity for all remaining transaction in the mempool after a block.
+# Since a block affects the application state, some transactions in the
+# mempool may become invalid. If this does not apply to your application,
+# you can disable rechecking.
 recheck = {{ .Mempool.Recheck }}
+
+# recheck_timeout is the time the application has during the rechecking process
+# to return CheckTx responses, once all requests have been sent. Responses that 
+# arrive after the timeout expires are discarded. It only applies to 
+# non-local ABCI clients and when recheck is enabled.
+#
+# The ideal value will strongly depend on the application. It could roughly be estimated as the
+# average size of the mempool multiplied by the average time it takes the application to validate one
+# transaction. We consider that the ABCI application runs in the same location as the CometBFT binary
+# so that the recheck duration is not affected by network delays when making requests and receiving responses.
+recheck_timeout = "{{ .Mempool.RecheckTimeout }}"
+
+# Broadcast (default: true) defines whether the mempool should relay
+# transactions to other peers. Setting this to false will stop the mempool
+# from relaying transactions to other peers until they are included in a
+# block. In other words, if Broadcast is disabled, only the peer you send
+# the tx to will see it until it is included in a block.
 broadcast = {{ .Mempool.Broadcast }}
+
+# WalPath (default: "") configures the location of the Write Ahead Log
+# (WAL) for the mempool. The WAL is disabled by default. To enable, set
+# WalPath to where you want the WAL to be written (e.g.
+# "data/mempool.wal").
 wal_dir = "{{ js .Mempool.WalPath }}"
 
 # Maximum number of transactions in the mempool
@@ -382,21 +408,20 @@ max_tx_bytes = {{ .Mempool.MaxTxBytes }}
 # XXX: Unused due to https://github.com/tendermint/tendermint/issues/5796
 max_batch_bytes = {{ .Mempool.MaxBatchBytes }}
 
-# ttl-duration, if non-zero, defines the maximum amount of time a transaction
-# can exist for in the mempool.
-#
-# Note, if ttl-num-blocks is also defined, a transaction will be removed if it
-# has existed in the mempool at least ttl-num-blocks number of blocks or if it's
-# insertion time into the mempool is beyond ttl-duration.
-ttl-duration = "{{ .Mempool.TTLDuration }}"
-
-# ttl-num-blocks, if non-zero, defines the maximum number of blocks a transaction
-# can exist for in the mempool.
-#
-# Note, if ttl-duration is also defined, a transaction will be removed if it
-# has existed in the mempool at least ttl-num-blocks number of blocks or if
-# it's insertion time into the mempool is beyond ttl-duration.
-ttl-num-blocks = {{ .Mempool.TTLNumBlocks }}
+# Experimental parameters to limit gossiping txs to up to the specified number of peers.
+# We use two independent upper values for persistent and non-persistent peers.
+# Unconditional peers are not affected by this feature.
+# If we are connected to more than the specified number of persistent peers, only send txs to
+# ExperimentalMaxGossipConnectionsToPersistentPeers of them. If one of those
+# persistent peers disconnects, activate another persistent peer.
+# Similarly for non-persistent peers, with an upper limit of
+# ExperimentalMaxGossipConnectionsToNonPersistentPeers.
+# If set to 0, the feature is disabled for the corresponding group of peers, that is, the
+# number of active connections to that group of peers is not bounded.
+# For non-persistent peers, if enabled, a value of 10 is recommended based on experimental
+# performance results using the default P2P configuration.
+experimental_max_gossip_connections_to_persistent_peers = {{ .Mempool.ExperimentalMaxGossipConnectionsToPersistentPeers }}
+experimental_max_gossip_connections_to_non_persistent_peers = {{ .Mempool.ExperimentalMaxGossipConnectionsToNonPersistentPeers }}
 
 #######################################################
 ###         State Sync Configuration Options        ###
@@ -551,101 +576,3 @@ max_open_connections = {{ .Instrumentation.MaxOpenConnections }}
 # Instrumentation namespace
 namespace = "{{ .Instrumentation.Namespace }}"
 `
-
-/****** these are for test settings ***********/
-
-func ResetTestRoot(testName string) *Config {
-	return ResetTestRootWithChainID(testName, "")
-}
-
-func ResetTestRootWithChainID(testName string, chainID string) *Config {
-	// create a unique, concurrency-safe test directory under os.TempDir()
-	rootDir, err := os.MkdirTemp("", fmt.Sprintf("%s-%s_", chainID, testName))
-	if err != nil {
-		panic(err)
-	}
-	// ensure config and data subdirs are created
-	if err := cmtos.EnsureDir(filepath.Join(rootDir, defaultConfigDir), DefaultDirPerm); err != nil {
-		panic(err)
-	}
-	if err := cmtos.EnsureDir(filepath.Join(rootDir, defaultDataDir), DefaultDirPerm); err != nil {
-		panic(err)
-	}
-
-	baseConfig := DefaultBaseConfig()
-	configFilePath := filepath.Join(rootDir, defaultConfigFilePath)
-	genesisFilePath := filepath.Join(rootDir, baseConfig.Genesis)
-	privKeyFilePath := filepath.Join(rootDir, baseConfig.PrivValidatorKey)
-	privStateFilePath := filepath.Join(rootDir, baseConfig.PrivValidatorState)
-
-	// Write default config file if missing.
-	if !cmtos.FileExists(configFilePath) {
-		writeDefaultConfigFile(configFilePath)
-	}
-	if !cmtos.FileExists(genesisFilePath) {
-		if chainID == "" {
-			chainID = "cometbft_test"
-		}
-		testGenesis := fmt.Sprintf(testGenesisFmt, chainID)
-		cmtos.MustWriteFile(genesisFilePath, []byte(testGenesis), 0644)
-	}
-	// we always overwrite the priv val
-	cmtos.MustWriteFile(privKeyFilePath, []byte(testPrivValidatorKey), 0644)
-	cmtos.MustWriteFile(privStateFilePath, []byte(testPrivValidatorState), 0644)
-
-	config := TestConfig().SetRoot(rootDir)
-	return config
-}
-
-var testGenesisFmt = `{
-  "genesis_time": "2018-10-10T08:20:13.695936996Z",
-  "chain_id": "%s",
-  "initial_height": "1",
-	"consensus_params": {
-		"block": {
-			"max_bytes": "3145728",
-			"max_gas": "-1",
-			"max_txs": "2400"
-		},
-		"evidence": {
-			"max_age_num_blocks": "100000",
-			"max_age_duration": "172800000000000",
-			"max_bytes": "1048576"
-		},
-		"validator": {
-			"pub_key_types": [
-				"ed25519"
-			]
-		},
-		"version": {}
-	},
-  "validators": [
-    {
-      "pub_key": {
-        "type": "tendermint/PubKeyEd25519",
-        "value":"AT/+aaL1eB0477Mud9JMm8Sh8BIvOYlPGC9KkIUmFaE="
-      },
-      "power": "10",
-      "name": ""
-    }
-  ],
-  "app_hash": ""
-}`
-
-var testPrivValidatorKey = `{
-  "address": "A3258DCBF45DCA0DF052981870F2D1441A36D145",
-  "pub_key": {
-    "type": "tendermint/PubKeyEd25519",
-    "value": "AT/+aaL1eB0477Mud9JMm8Sh8BIvOYlPGC9KkIUmFaE="
-  },
-  "priv_key": {
-    "type": "tendermint/PrivKeyEd25519",
-    "value": "EVkqJO/jIXp3rkASXfh9YnyToYXRXhBr6g9cQVxPFnQBP/5povV4HTjvsy530kybxKHwEi85iU8YL0qQhSYVoQ=="
-  }
-}`
-
-var testPrivValidatorState = `{
-  "height": "0",
-  "round": 0,
-  "step": 0
-}`

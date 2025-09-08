@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"syscall"
 	"testing"
@@ -20,11 +21,10 @@ import (
 	cfg "github.com/cometbft/cometbft/config"
 	"github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cometbft/cometbft/evidence"
+	"github.com/cometbft/cometbft/internal/test"
 	"github.com/cometbft/cometbft/libs/log"
 	cmtrand "github.com/cometbft/cometbft/libs/rand"
 	mempl "github.com/cometbft/cometbft/mempool"
-	mempoolv0 "github.com/cometbft/cometbft/mempool/v0"
-	mempoolv1 "github.com/cometbft/cometbft/mempool/v1" //nolint:staticcheck // SA1019 Priority mempool deprecated but still supported in this release.
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/p2p/conn"
 	p2pmock "github.com/cometbft/cometbft/p2p/mock"
@@ -37,7 +37,7 @@ import (
 )
 
 func TestNodeStartStop(t *testing.T) {
-	config := cfg.ResetTestRoot("node_node_test")
+	config := test.ResetTestRoot("node_node_test")
 	defer os.RemoveAll(config.RootDir)
 
 	// create & start node
@@ -53,7 +53,7 @@ func TestNodeStartStop(t *testing.T) {
 	require.NoError(t, err)
 	select {
 	case <-blocksSub.Out():
-	case <-blocksSub.Cancelled():
+	case <-blocksSub.Canceled():
 		t.Fatal("blocksSub was canceled")
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for the node to produce a block")
@@ -99,7 +99,7 @@ func TestSplitAndTrimEmpty(t *testing.T) {
 }
 
 func TestNodeDelayedStart(t *testing.T) {
-	config := cfg.ResetTestRoot("node_delayed_start_test")
+	config := test.ResetTestRoot("node_delayed_start_test")
 	defer os.RemoveAll(config.RootDir)
 	now := cmttime.Now()
 
@@ -117,7 +117,7 @@ func TestNodeDelayedStart(t *testing.T) {
 }
 
 func TestNodeSetAppVersion(t *testing.T) {
-	config := cfg.ResetTestRoot("node_app_version_test")
+	config := test.ResetTestRoot("node_app_version_test")
 	defer os.RemoveAll(config.RootDir)
 
 	// create & start node
@@ -125,7 +125,7 @@ func TestNodeSetAppVersion(t *testing.T) {
 	require.NoError(t, err)
 
 	// default config uses the kvstore app
-	appVersion := kvstore.ProtocolVersion
+	appVersion := kvstore.AppVersion
 
 	// check version is set in state
 	state, err := n.stateStore.Load()
@@ -136,10 +136,33 @@ func TestNodeSetAppVersion(t *testing.T) {
 	assert.Equal(t, n.nodeInfo.(p2p.DefaultNodeInfo).ProtocolVersion.App, appVersion)
 }
 
+func TestPprofServer(t *testing.T) {
+	config := test.ResetTestRoot("node_pprof_test")
+	defer os.RemoveAll(config.RootDir)
+	config.RPC.PprofListenAddress = testFreeAddr(t)
+
+	// should not work yet
+	_, err := http.Get("http://" + config.RPC.PprofListenAddress) //nolint: bodyclose
+	assert.Error(t, err)
+
+	n, err := DefaultNewNode(config, log.TestingLogger())
+	assert.NoError(t, err)
+	assert.NoError(t, n.Start())
+	defer func() {
+		require.NoError(t, n.Stop())
+	}()
+	assert.NotNil(t, n.pprofSrv)
+
+	resp, err := http.Get("http://" + config.RPC.PprofListenAddress + "/debug/pprof")
+	assert.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, 200, resp.StatusCode)
+}
+
 func TestNodeSetPrivValTCP(t *testing.T) {
 	addr := "tcp://" + testFreeAddr(t)
 
-	config := cfg.ResetTestRoot("node_priv_val_tcp_test")
+	config := test.ResetTestRoot("node_priv_val_tcp_test")
 	defer os.RemoveAll(config.RootDir)
 	config.BaseConfig.PrivValidatorListenAddr = addr
 
@@ -152,7 +175,7 @@ func TestNodeSetPrivValTCP(t *testing.T) {
 
 	signerServer := privval.NewSignerServer(
 		dialerEndpoint,
-		config.ChainID(),
+		test.DefaultTestChainID,
 		types.NewMockPV(),
 	)
 
@@ -173,7 +196,7 @@ func TestNodeSetPrivValTCP(t *testing.T) {
 func TestPrivValidatorListenAddrNoProtocol(t *testing.T) {
 	addrNoPrefix := testFreeAddr(t)
 
-	config := cfg.ResetTestRoot("node_priv_val_tcp_test")
+	config := test.ResetTestRoot("node_priv_val_tcp_test")
 	defer os.RemoveAll(config.RootDir)
 	config.BaseConfig.PrivValidatorListenAddr = addrNoPrefix
 
@@ -185,7 +208,7 @@ func TestNodeSetPrivValIPC(t *testing.T) {
 	tmpfile := "/tmp/kms." + cmtrand.Str(6) + ".sock"
 	defer os.Remove(tmpfile) // clean up
 
-	config := cfg.ResetTestRoot("node_priv_val_tcp_test")
+	config := test.ResetTestRoot("node_priv_val_tcp_test")
 	defer os.RemoveAll(config.RootDir)
 	config.BaseConfig.PrivValidatorListenAddr = "unix://" + tmpfile
 
@@ -198,7 +221,7 @@ func TestNodeSetPrivValIPC(t *testing.T) {
 
 	pvsc := privval.NewSignerServer(
 		dialerEndpoint,
-		config.ChainID(),
+		test.DefaultTestChainID,
 		types.NewMockPV(),
 	)
 
@@ -225,9 +248,12 @@ func testFreeAddr(t *testing.T) string {
 // create a proposal block using real and full
 // mempool and evidence pool and validate it.
 func TestCreateProposalBlock(t *testing.T) {
-	config := cfg.ResetTestRoot("node_create_proposal")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	config := test.ResetTestRoot("node_create_proposal")
 	defer os.RemoveAll(config.RootDir)
-	cc := proxy.NewLocalClientCreator(kvstore.NewApplication())
+	cc := proxy.NewLocalClientCreator(kvstore.NewInMemoryApplication())
 	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
 	err := proxyApp.Start()
 	require.Nil(t, err)
@@ -240,35 +266,23 @@ func TestCreateProposalBlock(t *testing.T) {
 	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: false,
 	})
-	maxBytes := 16384
-	var partSize uint32 = 256
-	maxEvidenceBytes := int64(maxBytes / 2)
-	state.ConsensusParams.Block.MaxBytes = int64(maxBytes)
+	var (
+		partSize uint32 = 256
+		maxBytes int64  = 16384
+	)
+	maxEvidenceBytes := maxBytes / 2
+	state.ConsensusParams.Block.MaxBytes = maxBytes
 	state.ConsensusParams.Evidence.MaxBytes = maxEvidenceBytes
 	proposerAddr, _ := state.Validators.GetByIndex(0)
 
 	// Make Mempool
 	memplMetrics := mempl.NopMetrics()
-	var mempool mempl.Mempool
-
-	switch config.Mempool.Version {
-	case cfg.MempoolV0:
-		mempool = mempoolv0.NewCListMempool(config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv0.WithMetrics(memplMetrics),
-			mempoolv0.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv0.WithPostCheck(sm.TxPostCheck(state)))
-	case cfg.MempoolV1:
-		mempool = mempoolv1.NewTxMempool(logger,
-			config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv1.WithMetrics(memplMetrics),
-			mempoolv1.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv1.WithPostCheck(sm.TxPostCheck(state)),
-		)
-	}
+	mempool := mempl.NewCListMempool(config.Mempool,
+		proxyApp.Mempool(),
+		state.LastBlockHeight,
+		mempl.WithMetrics(memplMetrics),
+		mempl.WithPreCheck(sm.TxPreCheck(state)),
+		mempl.WithPostCheck(sm.TxPostCheck(state)))
 
 	// Make EvidencePool
 	evidenceDB := dbm.NewMemDB()
@@ -295,7 +309,7 @@ func TestCreateProposalBlock(t *testing.T) {
 	// fill the mempool with more txs
 	// than can fit in a block
 	txLength := 100
-	for i := 0; i <= maxBytes/txLength; i++ {
+	for i := 0; i <= int(maxBytes)/txLength; i++ {
 		tx := cmtrand.Bytes(txLength)
 		err := mempool.CheckTx(tx, nil, mempl.TxInfo{})
 		assert.NoError(t, err)
@@ -305,18 +319,20 @@ func TestCreateProposalBlock(t *testing.T) {
 		stateStore,
 		logger,
 		proxyApp.Consensus(),
-		proxyApp.Prefetch(),
 		mempool,
 		evidencePool,
+		blockStore,
 	)
 
+	extCommit := &types.ExtendedCommit{Height: height - 1}
 	reveal := &cmtproto.Reveal{Height: height}
 	_ = privVals[0].SignReveal(state.ChainID, reveal)
-
-	commit := types.NewCommit(height-1, 0, types.BlockID{}, nil)
 	block, err := blockExec.CreateProposalBlock(
+		ctx,
 		height,
-		state, commit, reveal.Signature,
+		state,
+		extCommit,
+		reveal.Signature,
 		proposerAddr,
 	)
 	require.NoError(t, err)
@@ -324,7 +340,7 @@ func TestCreateProposalBlock(t *testing.T) {
 	// check that the part set does not exceed the maximum block size
 	partSet, err := block.MakePartSet(partSize)
 	require.NoError(t, err)
-	assert.Less(t, partSet.ByteSize(), int64(maxBytes))
+	assert.Less(t, partSet.ByteSize(), maxBytes)
 
 	partSetFromHeader := types.NewPartSetFromHeader(partSet.Header())
 	for partSetFromHeader.Count() < partSetFromHeader.Total() {
@@ -339,9 +355,12 @@ func TestCreateProposalBlock(t *testing.T) {
 }
 
 func TestMaxProposalBlockSize(t *testing.T) {
-	config := cfg.ResetTestRoot("node_create_proposal")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	config := test.ResetTestRoot("node_create_proposal")
 	defer os.RemoveAll(config.RootDir)
-	cc := proxy.NewLocalClientCreator(kvstore.NewApplication())
+	cc := proxy.NewLocalClientCreator(kvstore.NewInMemoryApplication())
 	proxyApp := proxy.NewAppConns(cc, proxy.NopMetrics())
 	err := proxyApp.Start()
 	require.Nil(t, err)
@@ -361,25 +380,14 @@ func TestMaxProposalBlockSize(t *testing.T) {
 
 	// Make Mempool
 	memplMetrics := mempl.NopMetrics()
-	var mempool mempl.Mempool
-	switch config.Mempool.Version {
-	case cfg.MempoolV0:
-		mempool = mempoolv0.NewCListMempool(config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv0.WithMetrics(memplMetrics),
-			mempoolv0.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv0.WithPostCheck(sm.TxPostCheck(state)))
-	case cfg.MempoolV1:
-		mempool = mempoolv1.NewTxMempool(logger,
-			config.Mempool,
-			proxyApp.Mempool(),
-			state.LastBlockHeight,
-			mempoolv1.WithMetrics(memplMetrics),
-			mempoolv1.WithPreCheck(sm.TxPreCheck(state)),
-			mempoolv1.WithPostCheck(sm.TxPostCheck(state)),
-		)
-	}
+	mempool := mempl.NewCListMempool(config.Mempool,
+		proxyApp.Mempool(),
+		state.LastBlockHeight,
+		mempl.WithMetrics(memplMetrics),
+		mempl.WithPreCheck(sm.TxPreCheck(state)),
+		mempl.WithPostCheck(sm.TxPostCheck(state)))
+
+	blockStore := store.NewBlockStore(dbm.NewMemDB())
 
 	// fill the mempool with one txs just below the maximum size
 	txLength := int(types.MaxDataBytesNoEvidence(maxBytes, 1))
@@ -391,18 +399,21 @@ func TestMaxProposalBlockSize(t *testing.T) {
 		stateStore,
 		logger,
 		proxyApp.Consensus(),
-		proxyApp.Prefetch(),
 		mempool,
 		sm.EmptyEvidencePool{},
+		blockStore,
 	)
 
-	commit := types.NewCommit(height-1, 0, types.BlockID{}, nil)
+	extCommit := &types.ExtendedCommit{Height: height - 1}
 	reveal := &cmtproto.Reveal{Height: height}
 	_ = privVals[0].SignReveal(state.ChainID, reveal)
 
 	block, _ := blockExec.CreateProposalBlock(
+		ctx,
 		height,
-		state, commit, reveal.Signature,
+		state,
+		extCommit,
+		reveal.Signature,
 		proposerAddr,
 	)
 	require.NoError(t, err)
@@ -418,7 +429,7 @@ func TestMaxProposalBlockSize(t *testing.T) {
 }
 
 func TestNodeNewNodeCustomReactors(t *testing.T) {
-	config := cfg.ResetTestRoot("node_new_node_custom_reactors_test")
+	config := test.ResetTestRoot("node_new_node_custom_reactors_test")
 	defer os.RemoveAll(config.RootDir)
 
 	cr := p2pmock.NewReactor()
@@ -430,7 +441,7 @@ func TestNodeNewNodeCustomReactors(t *testing.T) {
 			RecvMessageCapacity: 100,
 		},
 	}
-	customBlockchainReactor := p2pmock.NewReactor()
+	customBlocksyncReactor := p2pmock.NewReactor()
 
 	nodeKey, err := p2p.LoadOrGenNodeKey(config.NodeKeyFile())
 	require.NoError(t, err)
@@ -440,10 +451,10 @@ func TestNodeNewNodeCustomReactors(t *testing.T) {
 		nodeKey,
 		proxy.DefaultClientCreator(config.ProxyApp, config.ABCI, config.DBDir()),
 		DefaultGenesisDocProviderFunc(config),
-		DefaultDBProvider,
+		cfg.DefaultDBProvider,
 		DefaultMetricsProvider(config.Instrumentation),
 		log.TestingLogger(),
-		CustomReactors(map[string]p2p.Reactor{"FOO": cr, "BLOCKCHAIN": customBlockchainReactor}),
+		CustomReactors(map[string]p2p.Reactor{"FOO": cr, "BLOCKSYNC": customBlocksyncReactor}),
 	)
 	require.NoError(t, err)
 
@@ -454,8 +465,8 @@ func TestNodeNewNodeCustomReactors(t *testing.T) {
 	assert.True(t, cr.IsRunning())
 	assert.Equal(t, cr, n.Switch().Reactor("FOO"))
 
-	assert.True(t, customBlockchainReactor.IsRunning())
-	assert.Equal(t, customBlockchainReactor, n.Switch().Reactor("BLOCKCHAIN"))
+	assert.True(t, customBlocksyncReactor.IsRunning())
+	assert.Equal(t, customBlocksyncReactor, n.Switch().Reactor("BLOCKSYNC"))
 
 	channels := n.NodeInfo().(p2p.DefaultNodeInfo).Channels
 	assert.Contains(t, channels, mempl.MempoolChannel)

@@ -4,13 +4,13 @@ on:
   pull_request:
     push:
       branches:
-        - v0.37.x
+        - v0.38.x
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: technote-space/get-diff-action@v6
         with:
           PATTERNS: |

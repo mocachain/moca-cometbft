@@ -3,6 +3,7 @@
 package mocks
 
 import (
+	state "github.com/cometbft/cometbft/state"
 	mock "github.com/stretchr/testify/mock"
 
 	types "github.com/cometbft/cometbft/types"
@@ -22,6 +23,20 @@ func (_m *BlockStore) Base() int64 {
 		r0 = rf()
 	} else {
 		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// Close provides a mock function with given fields:
+func (_m *BlockStore) Close() error {
+	ret := _m.Called()
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func() error); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Error(0)
 	}
 
 	return r0
@@ -133,6 +148,22 @@ func (_m *BlockStore) LoadBlockCommit(height int64) *types.Commit {
 	return r0
 }
 
+// LoadBlockExtendedCommit provides a mock function with given fields: height
+func (_m *BlockStore) LoadBlockExtendedCommit(height int64) *types.ExtendedCommit {
+	ret := _m.Called(height)
+
+	var r0 *types.ExtendedCommit
+	if rf, ok := ret.Get(0).(func(int64) *types.ExtendedCommit); ok {
+		r0 = rf(height)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*types.ExtendedCommit)
+		}
+	}
+
+	return r0
+}
+
 // LoadBlockMeta provides a mock function with given fields: height
 func (_m *BlockStore) LoadBlockMeta(height int64) *types.BlockMeta {
 	ret := _m.Called(height)
@@ -197,29 +228,44 @@ func (_m *BlockStore) LoadSeenCommit(height int64) *types.Commit {
 	return r0
 }
 
-// PruneBlocks provides a mock function with given fields: height
-func (_m *BlockStore) PruneBlocks(height int64) (uint64, error) {
-	ret := _m.Called(height)
+// PruneBlocks provides a mock function with given fields: height, _a1
+func (_m *BlockStore) PruneBlocks(height int64, _a1 state.State) (uint64, int64, error) {
+	ret := _m.Called(height, _a1)
 
 	var r0 uint64
-	if rf, ok := ret.Get(0).(func(int64) uint64); ok {
-		r0 = rf(height)
+	var r1 int64
+	var r2 error
+	if rf, ok := ret.Get(0).(func(int64, state.State) (uint64, int64, error)); ok {
+		return rf(height, _a1)
+	}
+	if rf, ok := ret.Get(0).(func(int64, state.State) uint64); ok {
+		r0 = rf(height, _a1)
 	} else {
 		r0 = ret.Get(0).(uint64)
 	}
 
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64) error); ok {
-		r1 = rf(height)
+	if rf, ok := ret.Get(1).(func(int64, state.State) int64); ok {
+		r1 = rf(height, _a1)
 	} else {
-		r1 = ret.Error(1)
+		r1 = ret.Get(1).(int64)
 	}
 
-	return r0, r1
+	if rf, ok := ret.Get(2).(func(int64, state.State) error); ok {
+		r2 = rf(height, _a1)
+	} else {
+		r2 = ret.Error(2)
+	}
+
+	return r0, r1, r2
 }
 
 // SaveBlock provides a mock function with given fields: block, blockParts, seenCommit
 func (_m *BlockStore) SaveBlock(block *types.Block, blockParts *types.PartSet, seenCommit *types.Commit) {
+	_m.Called(block, blockParts, seenCommit)
+}
+
+// SaveBlockWithExtendedCommit provides a mock function with given fields: block, blockParts, seenCommit
+func (_m *BlockStore) SaveBlockWithExtendedCommit(block *types.Block, blockParts *types.PartSet, seenCommit *types.ExtendedCommit) {
 	_m.Called(block, blockParts, seenCommit)
 }
 

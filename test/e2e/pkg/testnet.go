@@ -9,7 +9,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -18,7 +17,9 @@ import (
 	"github.com/cometbft/cometbft/crypto"
 	"github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cometbft/cometbft/crypto/secp256k1"
+	"github.com/cometbft/cometbft/crypto/sr25519"
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
+	"github.com/cometbft/cometbft/types"
 
 	_ "embed"
 )
@@ -47,11 +48,12 @@ const (
 	ModeLight     Mode = "light"
 	ModeSeed      Mode = "seed"
 
-	ProtocolBuiltin Protocol = "builtin"
-	ProtocolFile    Protocol = "file"
-	ProtocolGRPC    Protocol = "grpc"
-	ProtocolTCP     Protocol = "tcp"
-	ProtocolUNIX    Protocol = "unix"
+	ProtocolBuiltin         Protocol = "builtin"
+	ProtocolBuiltinConnSync Protocol = "builtin_connsync"
+	ProtocolFile            Protocol = "file"
+	ProtocolGRPC            Protocol = "grpc"
+	ProtocolTCP             Protocol = "tcp"
+	ProtocolUNIX            Protocol = "unix"
 
 	PerturbationDisconnect Perturbation = "disconnect"
 	PerturbationKill       Perturbation = "kill"
@@ -59,32 +61,42 @@ const (
 	PerturbationRestart    Perturbation = "restart"
 	PerturbationUpgrade    Perturbation = "upgrade"
 
-	EvidenceAgeHeight int64         = 7
-	EvidenceAgeTime   time.Duration = 500 * time.Millisecond
+	EvidenceAgeHeight int64         = 14
+	EvidenceAgeTime   time.Duration = 1500 * time.Millisecond
 )
 
 // Testnet represents a single testnet.
 type Testnet struct {
-	Name                 string
-	File                 string
-	Dir                  string
-	IP                   *net.IPNet
-	InitialHeight        int64
-	InitialState         map[string]string
-	Validators           map[*Node]int64
-	ValidatorUpdates     map[int64]map[*Node]int64
-	Nodes                []*Node
-	KeyType              string
-	Evidence             int
-	LoadTxSizeBytes      int
-	LoadTxBatchSize      int
-	LoadTxConnections    int
-	ABCIProtocol         string
-	PrepareProposalDelay time.Duration
-	ProcessProposalDelay time.Duration
-	CheckTxDelay         time.Duration
-	UpgradeVersion       string
-	Prometheus           bool
+	Name                                                 string
+	File                                                 string
+	Dir                                                  string
+	IP                                                   *net.IPNet
+	InitialHeight                                        int64
+	InitialState                                         map[string]string
+	Validators                                           map[*Node]int64
+	ValidatorUpdates                                     map[int64]map[*Node]int64
+	Nodes                                                []*Node
+	KeyType                                              string
+	Evidence                                             int
+	LoadTxSizeBytes                                      int
+	LoadTxBatchSize                                      int
+	LoadTxConnections                                    int
+	LoadMaxTxs                                           int
+	ABCIProtocol                                         string
+	PrepareProposalDelay                                 time.Duration
+	ProcessProposalDelay                                 time.Duration
+	CheckTxDelay                                         time.Duration
+	VoteExtensionDelay                                   time.Duration
+	FinalizeBlockDelay                                   time.Duration
+	UpgradeVersion                                       string
+	LogLevel                                             string
+	LogFormat                                            string
+	Prometheus                                           bool
+	BlockMaxBytes                                        int64
+	VoteExtensionsEnableHeight                           int64
+	VoteExtensionsUpdateHeight                           int64
+	ExperimentalMaxGossipConnectionsToPersistentPeers    uint
+	ExperimentalMaxGossipConnectionsToNonPersistentPeers uint
 }
 
 // Node represents a CometBFT node in a testnet.
@@ -95,12 +107,12 @@ type Node struct {
 	Mode                Mode
 	PrivvalKey          crypto.PrivKey
 	NodeKey             crypto.PrivKey
-	IP                  net.IP
+	InternalIP          net.IP
+	ExternalIP          net.IP
 	ProxyPort           uint32
 	StartAt             int64
-	BlockSync           string
+	BlockSyncVersion    string
 	StateSync           bool
-	Mempool             string
 	Database            string
 	ABCIProtocol        Protocol
 	PrivvalProtocol     Protocol
@@ -120,10 +132,19 @@ type Node struct {
 // The testnet generation must be deterministic, since it is generated
 // separately by the runner and the test cases. For this reason, testnets use a
 // random seed to generate e.g. keys.
-func LoadTestnet(manifest Manifest, fname string, ifd InfrastructureData) (*Testnet, error) {
-	dir := strings.TrimSuffix(fname, filepath.Ext(fname))
+func LoadTestnet(file string, ifd InfrastructureData) (*Testnet, error) {
+	manifest, err := LoadManifest(file)
+	if err != nil {
+		return nil, err
+	}
+	return NewTestnetFromManifest(manifest, file, ifd)
+}
+
+// NewTestnetFromManifest creates and validates a testnet from a manifest
+func NewTestnetFromManifest(manifest Manifest, file string, ifd InfrastructureData) (*Testnet, error) {
+	dir := strings.TrimSuffix(file, filepath.Ext(file))
+
 	keyGen := newKeyGenerator(randomSeed)
-	proxyPortGen := newPortGenerator(proxyPortFirst)
 	prometheusProxyPortGen := newPortGenerator(prometheusProxyPortFirst)
 	_, ipNet, err := net.ParseCIDR(ifd.Network)
 	if err != nil {
@@ -131,25 +152,35 @@ func LoadTestnet(manifest Manifest, fname string, ifd InfrastructureData) (*Test
 	}
 
 	testnet := &Testnet{
-		Name:                 filepath.Base(dir),
-		File:                 fname,
-		Dir:                  dir,
-		IP:                   ipNet,
-		InitialHeight:        1,
-		InitialState:         manifest.InitialState,
-		Validators:           map[*Node]int64{},
-		ValidatorUpdates:     map[int64]map[*Node]int64{},
-		Nodes:                []*Node{},
-		Evidence:             manifest.Evidence,
-		LoadTxSizeBytes:      manifest.LoadTxSizeBytes,
-		LoadTxBatchSize:      manifest.LoadTxBatchSize,
-		LoadTxConnections:    manifest.LoadTxConnections,
-		ABCIProtocol:         manifest.ABCIProtocol,
-		PrepareProposalDelay: manifest.PrepareProposalDelay,
-		ProcessProposalDelay: manifest.ProcessProposalDelay,
-		CheckTxDelay:         manifest.CheckTxDelay,
-		UpgradeVersion:       manifest.UpgradeVersion,
-		Prometheus:           manifest.Prometheus,
+		Name:                       filepath.Base(dir),
+		File:                       file,
+		Dir:                        dir,
+		IP:                         ipNet,
+		InitialHeight:              1,
+		InitialState:               manifest.InitialState,
+		Validators:                 map[*Node]int64{},
+		ValidatorUpdates:           map[int64]map[*Node]int64{},
+		Nodes:                      []*Node{},
+		Evidence:                   manifest.Evidence,
+		LoadTxSizeBytes:            manifest.LoadTxSizeBytes,
+		LoadTxBatchSize:            manifest.LoadTxBatchSize,
+		LoadTxConnections:          manifest.LoadTxConnections,
+		LoadMaxTxs:                 manifest.LoadMaxTxs,
+		ABCIProtocol:               manifest.ABCIProtocol,
+		PrepareProposalDelay:       manifest.PrepareProposalDelay,
+		ProcessProposalDelay:       manifest.ProcessProposalDelay,
+		CheckTxDelay:               manifest.CheckTxDelay,
+		VoteExtensionDelay:         manifest.VoteExtensionDelay,
+		FinalizeBlockDelay:         manifest.FinalizeBlockDelay,
+		UpgradeVersion:             manifest.UpgradeVersion,
+		LogLevel:                   manifest.LogLevel,
+		LogFormat:                  manifest.LogFormat,
+		Prometheus:                 manifest.Prometheus,
+		BlockMaxBytes:              manifest.BlockMaxBytes,
+		VoteExtensionsEnableHeight: manifest.VoteExtensionsEnableHeight,
+		VoteExtensionsUpdateHeight: manifest.VoteExtensionsUpdateHeight,
+		ExperimentalMaxGossipConnectionsToPersistentPeers:    manifest.ExperimentalMaxGossipConnectionsToPersistentPeers,
+		ExperimentalMaxGossipConnectionsToNonPersistentPeers: manifest.ExperimentalMaxGossipConnectionsToNonPersistentPeers,
 	}
 	if len(manifest.KeyType) != 0 {
 		testnet.KeyType = manifest.KeyType
@@ -173,18 +204,15 @@ func LoadTestnet(manifest Manifest, fname string, ifd InfrastructureData) (*Test
 		testnet.LoadTxSizeBytes = defaultTxSizeBytes
 	}
 
-	// Set up nodes, in alphabetical order (IPs and ports get same order).
-	nodeNames := []string{}
-	for name := range manifest.Nodes {
-		nodeNames = append(nodeNames, name)
-	}
-	sort.Strings(nodeNames)
-
-	for _, name := range nodeNames {
+	for _, name := range sortNodeNames(manifest) {
 		nodeManifest := manifest.Nodes[name]
 		ind, ok := ifd.Instances[name]
 		if !ok {
 			return nil, fmt.Errorf("information for node '%s' missing from infrastructure data", name)
+		}
+		extIP := ind.ExtIPAddress
+		if len(extIP) == 0 {
+			extIP = ind.IPAddress
 		}
 		v := nodeManifest.Version
 		if v == "" {
@@ -197,15 +225,15 @@ func LoadTestnet(manifest Manifest, fname string, ifd InfrastructureData) (*Test
 			Testnet:          testnet,
 			PrivvalKey:       keyGen.Generate(manifest.KeyType),
 			NodeKey:          keyGen.Generate("ed25519"),
-			IP:               ind.IPAddress,
-			ProxyPort:        proxyPortGen.Next(),
+			InternalIP:       ind.IPAddress,
+			ExternalIP:       extIP,
+			ProxyPort:        ind.Port,
 			Mode:             ModeValidator,
 			Database:         "goleveldb",
 			ABCIProtocol:     Protocol(testnet.ABCIProtocol),
 			PrivvalProtocol:  ProtocolFile,
 			StartAt:          nodeManifest.StartAt,
-			BlockSync:        nodeManifest.BlockSync,
-			Mempool:          nodeManifest.Mempool,
+			BlockSyncVersion: nodeManifest.BlockSyncVersion,
 			StateSync:        nodeManifest.StateSync,
 			PersistInterval:  1,
 			SnapshotInterval: nodeManifest.SnapshotInterval,
@@ -216,6 +244,9 @@ func LoadTestnet(manifest Manifest, fname string, ifd InfrastructureData) (*Test
 		}
 		if node.StartAt == testnet.InitialHeight {
 			node.StartAt = 0 // normalize to 0 for initial nodes, since code expects this
+		}
+		if node.BlockSyncVersion == "" {
+			node.BlockSyncVersion = "v0"
 		}
 		if nodeManifest.Mode != "" {
 			node.Mode = Mode(nodeManifest.Mode)
@@ -322,6 +353,40 @@ func (t Testnet) Validate() error {
 	if len(t.Nodes) == 0 {
 		return errors.New("network has no nodes")
 	}
+	if t.BlockMaxBytes > types.MaxBlockSizeBytes {
+		return fmt.Errorf("value of BlockMaxBytes cannot be higher than %d", types.MaxBlockSizeBytes)
+	}
+	if t.VoteExtensionsUpdateHeight < -1 {
+		return fmt.Errorf("value of VoteExtensionsUpdateHeight must be positive, 0 (InitChain), "+
+			"or -1 (Genesis); update height %d", t.VoteExtensionsUpdateHeight)
+	}
+	if t.VoteExtensionsEnableHeight < 0 {
+		return fmt.Errorf("value of VoteExtensionsEnableHeight must be positive, or 0 (disable); "+
+			"enable height %d", t.VoteExtensionsEnableHeight)
+	}
+	if t.VoteExtensionsUpdateHeight > 0 && t.VoteExtensionsUpdateHeight < t.InitialHeight {
+		return fmt.Errorf("a value of VoteExtensionsUpdateHeight greater than 0 "+
+			"must not be less than InitialHeight; "+
+			"update height %d, initial height %d",
+			t.VoteExtensionsUpdateHeight, t.InitialHeight,
+		)
+	}
+	if t.VoteExtensionsEnableHeight > 0 {
+		if t.VoteExtensionsEnableHeight < t.InitialHeight {
+			return fmt.Errorf("a value of VoteExtensionsEnableHeight greater than 0 "+
+				"must not be less than InitialHeight; "+
+				"enable height %d, initial height %d",
+				t.VoteExtensionsEnableHeight, t.InitialHeight,
+			)
+		}
+		if t.VoteExtensionsEnableHeight <= t.VoteExtensionsUpdateHeight {
+			return fmt.Errorf("a value of VoteExtensionsEnableHeight greater than 0 "+
+				"must be greater than VoteExtensionsUpdateHeight; "+
+				"update height %d, enable height %d",
+				t.VoteExtensionsUpdateHeight, t.VoteExtensionsEnableHeight,
+			)
+		}
+	}
 	for _, node := range t.Nodes {
 		if err := node.Validate(t); err != nil {
 			return fmt.Errorf("invalid node %q: %w", node.Name, err)
@@ -335,11 +400,11 @@ func (n Node) Validate(testnet Testnet) error {
 	if n.Name == "" {
 		return errors.New("node has no name")
 	}
-	if n.IP == nil {
+	if n.InternalIP == nil {
 		return errors.New("node has no IP address")
 	}
-	if !testnet.IP.Contains(n.IP) {
-		return fmt.Errorf("node IP %v is not in testnet network %v", n.IP, testnet.IP)
+	if !testnet.IP.Contains(n.InternalIP) {
+		return fmt.Errorf("node IP %v is not in testnet network %v", n.InternalIP, testnet.IP)
 	}
 	if n.ProxyPort == n.PrometheusProxyPort {
 		return fmt.Errorf("node local port %v used also for Prometheus local port", n.ProxyPort)
@@ -351,7 +416,7 @@ func (n Node) Validate(testnet Testnet) error {
 		return fmt.Errorf("local port %v must be >1024", n.PrometheusProxyPort)
 	}
 	for _, peer := range testnet.Nodes {
-		if peer.Name != n.Name && peer.ProxyPort == n.ProxyPort {
+		if peer.Name != n.Name && peer.ProxyPort == n.ProxyPort && peer.ExternalIP.Equal(n.ExternalIP) {
 			return fmt.Errorf("peer %q also has local port %v", peer.Name, n.ProxyPort)
 		}
 		if n.PrometheusProxyPort > 0 {
@@ -360,15 +425,10 @@ func (n Node) Validate(testnet Testnet) error {
 			}
 		}
 	}
-	switch n.BlockSync {
-	case "", "v0":
+	switch n.BlockSyncVersion {
+	case "v0":
 	default:
-		return fmt.Errorf("invalid block sync setting %q", n.BlockSync)
-	}
-	switch n.Mempool {
-	case "", "v0", "v1":
-	default:
-		return fmt.Errorf("invalid mempool version %q", n.Mempool)
+		return fmt.Errorf("invalid block sync setting %q", n.BlockSyncVersion)
 	}
 	switch n.Database {
 	case "goleveldb", "cleveldb", "boltdb", "rocksdb", "badgerdb":
@@ -376,11 +436,11 @@ func (n Node) Validate(testnet Testnet) error {
 		return fmt.Errorf("invalid database setting %q", n.Database)
 	}
 	switch n.ABCIProtocol {
-	case ProtocolBuiltin, ProtocolUNIX, ProtocolTCP, ProtocolGRPC:
+	case ProtocolBuiltin, ProtocolBuiltinConnSync, ProtocolUNIX, ProtocolTCP, ProtocolGRPC:
 	default:
 		return fmt.Errorf("invalid ABCI protocol setting %q", n.ABCIProtocol)
 	}
-	if n.Mode == ModeLight && n.ABCIProtocol != ProtocolBuiltin {
+	if n.Mode == ModeLight && n.ABCIProtocol != ProtocolBuiltin && n.ABCIProtocol != ProtocolBuiltinConnSync {
 		return errors.New("light client must use builtin protocol")
 	}
 	switch n.PrivvalProtocol {
@@ -505,8 +565,8 @@ func (t Testnet) WritePrometheusConfig() error {
 
 // Address returns a P2P endpoint address for the node.
 func (n Node) AddressP2P(withID bool) string {
-	ip := n.IP.String()
-	if n.IP.To4() == nil {
+	ip := n.InternalIP.String()
+	if n.InternalIP.To4() == nil {
 		// IPv6 addresses must be wrapped in [] to avoid conflict with : port separator
 		ip = fmt.Sprintf("[%v]", ip)
 	}
@@ -519,8 +579,8 @@ func (n Node) AddressP2P(withID bool) string {
 
 // Address returns an RPC endpoint address for the node.
 func (n Node) AddressRPC() string {
-	ip := n.IP.String()
-	if n.IP.To4() == nil {
+	ip := n.InternalIP.String()
+	if n.InternalIP.To4() == nil {
 		// IPv6 addresses must be wrapped in [] to avoid conflict with : port separator
 		ip = fmt.Sprintf("[%v]", ip)
 	}
@@ -529,7 +589,7 @@ func (n Node) AddressRPC() string {
 
 // Client returns an RPC client for a node.
 func (n Node) Client() (*rpchttp.HTTP, error) {
-	return rpchttp.New(fmt.Sprintf("http://127.0.0.1:%v", n.ProxyPort), "/websocket")
+	return rpchttp.New(fmt.Sprintf("http://%s:%v", n.ExternalIP, n.ProxyPort), "/websocket")
 }
 
 // Stateless returns true if the node is either a seed node or a light node
@@ -558,6 +618,8 @@ func (g *keyGenerator) Generate(keyType string) crypto.PrivKey {
 	switch keyType {
 	case "secp256k1":
 		return secp256k1.GenPrivKeySecp256k1(seed)
+	case "sr25519":
+		return sr25519.GenPrivKeyFromSecret(seed)
 	case "", "ed25519":
 		return ed25519.GenPrivKeyFromSecret(seed)
 	default:

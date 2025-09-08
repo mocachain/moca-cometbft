@@ -3,11 +3,10 @@
 package mocks
 
 import (
+	abcitypes "github.com/cometbft/cometbft/abci/types"
 	mock "github.com/stretchr/testify/mock"
 
 	state "github.com/cometbft/cometbft/state"
-
-	tendermintstate "github.com/cometbft/cometbft/proto/tendermint/state"
 
 	types "github.com/cometbft/cometbft/types"
 )
@@ -45,18 +44,21 @@ func (_m *Store) Close() error {
 	return r0
 }
 
-// Load provides a mock function with given fields:
-func (_m *Store) Load() (state.State, error) {
+// GetOfflineStateSyncHeight provides a mock function with given fields:
+func (_m *Store) GetOfflineStateSyncHeight() (int64, error) {
 	ret := _m.Called()
 
-	var r0 state.State
-	if rf, ok := ret.Get(0).(func() state.State); ok {
+	var r0 int64
+	var r1 error
+	if rf, ok := ret.Get(0).(func() (int64, error)); ok {
+		return rf()
+	}
+	if rf, ok := ret.Get(0).(func() int64); ok {
 		r0 = rf()
 	} else {
-		r0 = ret.Get(0).(state.State)
+		r0 = ret.Get(0).(int64)
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func() error); ok {
 		r1 = rf()
 	} else {
@@ -66,22 +68,23 @@ func (_m *Store) Load() (state.State, error) {
 	return r0, r1
 }
 
-// LoadABCIResponses provides a mock function with given fields: _a0
-func (_m *Store) LoadABCIResponses(_a0 int64) (*tendermintstate.ABCIResponses, error) {
-	ret := _m.Called(_a0)
+// Load provides a mock function with given fields:
+func (_m *Store) Load() (state.State, error) {
+	ret := _m.Called()
 
-	var r0 *tendermintstate.ABCIResponses
-	if rf, ok := ret.Get(0).(func(int64) *tendermintstate.ABCIResponses); ok {
-		r0 = rf(_a0)
+	var r0 state.State
+	var r1 error
+	if rf, ok := ret.Get(0).(func() (state.State, error)); ok {
+		return rf()
+	}
+	if rf, ok := ret.Get(0).(func() state.State); ok {
+		r0 = rf()
 	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*tendermintstate.ABCIResponses)
-		}
+		r0 = ret.Get(0).(state.State)
 	}
 
-	var r1 error
-	if rf, ok := ret.Get(1).(func(int64) error); ok {
-		r1 = rf(_a0)
+	if rf, ok := ret.Get(1).(func() error); ok {
+		r1 = rf()
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -134,13 +137,42 @@ func (_m *Store) LoadConsensusParams(_a0 int64) (types.ConsensusParams, error) {
 	ret := _m.Called(_a0)
 
 	var r0 types.ConsensusParams
+	var r1 error
+	if rf, ok := ret.Get(0).(func(int64) (types.ConsensusParams, error)); ok {
+		return rf(_a0)
+	}
 	if rf, ok := ret.Get(0).(func(int64) types.ConsensusParams); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Get(0).(types.ConsensusParams)
 	}
 
+	if rf, ok := ret.Get(1).(func(int64) error); ok {
+		r1 = rf(_a0)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LoadFinalizeBlockResponse provides a mock function with given fields: _a0
+func (_m *Store) LoadFinalizeBlockResponse(_a0 int64) (*abcitypes.ResponseFinalizeBlock, error) {
+	ret := _m.Called(_a0)
+
+	var r0 *abcitypes.ResponseFinalizeBlock
 	var r1 error
+	if rf, ok := ret.Get(0).(func(int64) (*abcitypes.ResponseFinalizeBlock, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(int64) *abcitypes.ResponseFinalizeBlock); ok {
+		r0 = rf(_a0)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*abcitypes.ResponseFinalizeBlock)
+		}
+	}
+
 	if rf, ok := ret.Get(1).(func(int64) error); ok {
 		r1 = rf(_a0)
 	} else {
@@ -155,13 +187,16 @@ func (_m *Store) LoadFromDBOrGenesisDoc(_a0 *types.GenesisDoc) (state.State, err
 	ret := _m.Called(_a0)
 
 	var r0 state.State
+	var r1 error
+	if rf, ok := ret.Get(0).(func(*types.GenesisDoc) (state.State, error)); ok {
+		return rf(_a0)
+	}
 	if rf, ok := ret.Get(0).(func(*types.GenesisDoc) state.State); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Get(0).(state.State)
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func(*types.GenesisDoc) error); ok {
 		r1 = rf(_a0)
 	} else {
@@ -176,13 +211,16 @@ func (_m *Store) LoadFromDBOrGenesisFile(_a0 string) (state.State, error) {
 	ret := _m.Called(_a0)
 
 	var r0 state.State
+	var r1 error
+	if rf, ok := ret.Get(0).(func(string) (state.State, error)); ok {
+		return rf(_a0)
+	}
 	if rf, ok := ret.Get(0).(func(string) state.State); ok {
 		r0 = rf(_a0)
 	} else {
 		r0 = ret.Get(0).(state.State)
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func(string) error); ok {
 		r1 = rf(_a0)
 	} else {
@@ -192,20 +230,23 @@ func (_m *Store) LoadFromDBOrGenesisFile(_a0 string) (state.State, error) {
 	return r0, r1
 }
 
-// LoadLastABCIResponse provides a mock function with given fields: _a0
-func (_m *Store) LoadLastABCIResponse(_a0 int64) (*tendermintstate.ABCIResponses, error) {
+// LoadLastFinalizeBlockResponse provides a mock function with given fields: _a0
+func (_m *Store) LoadLastFinalizeBlockResponse(_a0 int64) (*abcitypes.ResponseFinalizeBlock, error) {
 	ret := _m.Called(_a0)
 
-	var r0 *tendermintstate.ABCIResponses
-	if rf, ok := ret.Get(0).(func(int64) *tendermintstate.ABCIResponses); ok {
+	var r0 *abcitypes.ResponseFinalizeBlock
+	var r1 error
+	if rf, ok := ret.Get(0).(func(int64) (*abcitypes.ResponseFinalizeBlock, error)); ok {
+		return rf(_a0)
+	}
+	if rf, ok := ret.Get(0).(func(int64) *abcitypes.ResponseFinalizeBlock); ok {
 		r0 = rf(_a0)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*tendermintstate.ABCIResponses)
+			r0 = ret.Get(0).(*abcitypes.ResponseFinalizeBlock)
 		}
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func(int64) error); ok {
 		r1 = rf(_a0)
 	} else {
@@ -220,6 +261,10 @@ func (_m *Store) LoadValidators(_a0 int64) (*types.ValidatorSet, error) {
 	ret := _m.Called(_a0)
 
 	var r0 *types.ValidatorSet
+	var r1 error
+	if rf, ok := ret.Get(0).(func(int64) (*types.ValidatorSet, error)); ok {
+		return rf(_a0)
+	}
 	if rf, ok := ret.Get(0).(func(int64) *types.ValidatorSet); ok {
 		r0 = rf(_a0)
 	} else {
@@ -228,7 +273,6 @@ func (_m *Store) LoadValidators(_a0 int64) (*types.ValidatorSet, error) {
 		}
 	}
 
-	var r1 error
 	if rf, ok := ret.Get(1).(func(int64) error); ok {
 		r1 = rf(_a0)
 	} else {
@@ -238,13 +282,13 @@ func (_m *Store) LoadValidators(_a0 int64) (*types.ValidatorSet, error) {
 	return r0, r1
 }
 
-// PruneStates provides a mock function with given fields: _a0, _a1
-func (_m *Store) PruneStates(_a0 int64, _a1 int64) error {
-	ret := _m.Called(_a0, _a1)
+// PruneStates provides a mock function with given fields: _a0, _a1, _a2
+func (_m *Store) PruneStates(_a0 int64, _a1 int64, _a2 int64) error {
+	ret := _m.Called(_a0, _a1, _a2)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(int64, int64) error); ok {
-		r0 = rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(int64, int64, int64) error); ok {
+		r0 = rf(_a0, _a1, _a2)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -266,13 +310,27 @@ func (_m *Store) Save(_a0 state.State) error {
 	return r0
 }
 
-// SaveABCIResponses provides a mock function with given fields: _a0, _a1
-func (_m *Store) SaveABCIResponses(_a0 int64, _a1 *tendermintstate.ABCIResponses) error {
+// SaveFinalizeBlockResponse provides a mock function with given fields: _a0, _a1
+func (_m *Store) SaveFinalizeBlockResponse(_a0 int64, _a1 *abcitypes.ResponseFinalizeBlock) error {
 	ret := _m.Called(_a0, _a1)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(int64, *tendermintstate.ABCIResponses) error); ok {
+	if rf, ok := ret.Get(0).(func(int64, *abcitypes.ResponseFinalizeBlock) error); ok {
 		r0 = rf(_a0, _a1)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// SetOfflineStateSyncHeight provides a mock function with given fields: height
+func (_m *Store) SetOfflineStateSyncHeight(height int64) error {
+	ret := _m.Called(height)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(int64) error); ok {
+		r0 = rf(height)
 	} else {
 		r0 = ret.Error(0)
 	}

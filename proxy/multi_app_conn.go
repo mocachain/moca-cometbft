@@ -11,7 +11,6 @@ import (
 
 const (
 	connConsensus = "consensus"
-	connPrefetch  = "prefetch"
 	connMempool   = "mempool"
 	connQuery     = "query"
 	connSnapshot  = "snapshot"
@@ -28,8 +27,6 @@ type AppConns interface {
 	Mempool() AppConnMempool
 	// Consensus connection
 	Consensus() AppConnConsensus
-	// Prefetch connection
-	Prefetch() AppConnPrefetch
 	// Query connection
 	Query() AppConnQuery
 	// Snapshot connection
@@ -54,14 +51,12 @@ type multiAppConn struct {
 
 	metrics       *Metrics
 	consensusConn AppConnConsensus
-	prefetchConn  AppConnPrefetch
 	mempoolConn   AppConnMempool
 	queryConn     AppConnQuery
 	snapshotConn  AppConnSnapshot
 	ethQueryConn  AppConnEthQuery
 
 	consensusConnClient abcicli.Client
-	prefetchConnClient  abcicli.Client
 	mempoolConnClient   abcicli.Client
 	queryConnClient     abcicli.Client
 	snapshotConnClient  abcicli.Client
@@ -86,10 +81,6 @@ func (app *multiAppConn) Mempool() AppConnMempool {
 
 func (app *multiAppConn) Consensus() AppConnConsensus {
 	return app.consensusConn
-}
-
-func (app *multiAppConn) Prefetch() AppConnPrefetch {
-	return app.prefetchConn
 }
 
 func (app *multiAppConn) Query() AppConnQuery {
@@ -144,14 +135,6 @@ func (app *multiAppConn) OnStart() error {
 	app.ethQueryConnClient = c
 	app.ethQueryConn = NewAppConnEthQuery(c)
 
-	c, err = app.abciClientFor(connPrefetch)
-	if err != nil {
-		app.stopAllClients()
-		return err
-	}
-	app.prefetchConnClient = c
-	app.prefetchConn = NewAppConnPrefetch(c)
-
 	// Kill CometBFT if the ABCI application crashes.
 	go app.killTMOnClientError()
 
@@ -194,10 +177,6 @@ func (app *multiAppConn) killTMOnClientError() {
 		if err := app.ethQueryConnClient.Error(); err != nil {
 			killFn(connEthQuery, err, app.Logger)
 		}
-	case <-app.prefetchConnClient.Quit():
-		if err := app.prefetchConnClient.Error(); err != nil {
-			killFn(connPrefetch, err, app.Logger)
-		}
 	}
 }
 
@@ -225,11 +204,6 @@ func (app *multiAppConn) stopAllClients() {
 	if app.ethQueryConnClient != nil {
 		if err := app.ethQueryConnClient.Stop(); err != nil {
 			app.Logger.Error("error while stopping eth query client", "error", err)
-		}
-	}
-	if app.prefetchConnClient != nil {
-		if err := app.prefetchConnClient.Stop(); err != nil {
-			app.Logger.Error("error while stopping prefetch client", "error", err)
 		}
 	}
 }

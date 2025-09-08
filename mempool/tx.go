@@ -21,7 +21,7 @@ type TxInfo struct {
 // CheckTxRequest is a request to CheckTx.
 type CheckTxRequest struct {
 	Tx     types.Tx
-	CB     func(*abci.Response)
+	CB     func(*abci.ResponseCheckTx)
 	TxInfo TxInfo
 	Err    chan error
 }

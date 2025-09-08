@@ -1,3 +1,6 @@
+---
+order: 6
+---
 # WAL
 
 Consensus module writes every message to the WAL (write-ahead log).
@@ -28,5 +31,5 @@ WAL. Then it will go to precommit, and that time it will work because the
 private validator contains the `LastSignBytes` and then we’ll replay the
 precommit from the WAL.
 
-Make sure to read about [WAL corruption](https://github.com/cometbft/cometbft/blob/v0.37.x/docs/core/running-in-production.md#wal-corruption)
+Make sure to read about [WAL corruption](https://github.com/cometbft/cometbft/blob/v0.38.x/docs/core/running-in-production.md#wal-corruption)
 and recovery strategies.

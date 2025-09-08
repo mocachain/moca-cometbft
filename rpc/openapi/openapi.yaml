@@ -62,10 +62,10 @@ info:
 
         echo '{ "jsonrpc": "2.0","method": "subscribe","id": 0,"params": {"query": "tm.event='"'NewBlock'"'"} }' | websocat -n -t ws://127.0.0.1:26657/websocket
 
-  version: "v0.37"
+  version: "v0.38.x"
   license:
     name: Apache 2.0
-    url: https://github.com/cometbft/cometbft/blob/v0.37.x/LICENSE
+    url: https://github.com/cometbft/cometbft/blob/v0.38.x/LICENSE
 servers:
   - url: https://rpc.cosmos.directory/cosmoshub
     description: Interact with the CometBFT RPC from a public node in the Cosmos registry
@@ -92,7 +92,7 @@ paths:
       description: |
         If you want to be sure that the transaction is included in a block, you can
         subscribe for the result using JSONRPC via a websocket. See
-        https://docs.cometbft.com/v0.37/core/subscription.html
+        https://docs.cometbft.com/v0.38.x/core/subscription.html
         If you haven't received anything after a couple of blocks, resend it. If the
         same happens again, send it to some other node. A few reasons why it could
         happen:
@@ -103,9 +103,8 @@ paths:
         (https://github.com/tendermint/tendermint/issues/3322)
 
 
-        Please refer to
-        https://docs.cometbft.com/v0.37/core/using-cometbft.html#formatting
-        for formatting/encoding rules.
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/v0.38.x/core/using-cometbft.html#formatting)
+        for additional details
 
       parameters:
         - in: query
@@ -137,7 +136,7 @@ paths:
       description: |
         If you want to be sure that the transaction is included in a block, you can
         subscribe for the result using JSONRPC via a websocket. See
-        https://docs.cometbft.com/v0.37/core/subscription.html
+        https://docs.cometbft.com/v0.38.x/core/subscription.html
         If you haven't received anything after a couple of blocks, resend it. If the
         same happens again, send it to some other node. A few reasons why it could
         happen:
@@ -148,9 +147,8 @@ paths:
         (https://github.com/tendermint/tendermint/issues/3322)
         3. node can be offline
 
-        Please refer to
-        https://docs.cometbft.com/v0.37/core/using-cometbft.html#formatting
-        for formatting/encoding rules.
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/v0.38.x/core/using-cometbft.html#formatting)
+        for additional details
 
       parameters:
         - in: query
@@ -183,7 +181,7 @@ paths:
         IMPORTANT: use only for testing and development. In production, use
         BroadcastTxSync or BroadcastTxAsync. You can subscribe for the transaction
         result using JSONRPC via a websocket. See
-        https://docs.cometbft.com/v0.37/core/subscription.html
+        https://docs.cometbft.com/v0.38.x/core/subscription.html
 
         CONTRACT: only returns error if mempool.CheckTx() errs or if we timeout
         waiting for tx to commit.
@@ -191,9 +189,8 @@ paths:
         If CheckTx or DeliverTx fail, no error will be returned, but the returned result
         will contain a non-OK ABCI code.
 
-        Please refer to
-        https://docs.cometbft.com/v0.37/core/using-cometbft.html#formatting
-        for formatting/encoding rules.
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/v0.38.x/core/using-cometbft.html#formatting)
+        for additional details
 
       parameters:
         - in: query
@@ -225,9 +222,8 @@ paths:
       description: |
         The transaction won't be added to the mempool.
 
-        Please refer to
-        https://docs.cometbft.com/v0.37/core/using-cometbft.html#formatting
-        for formatting/encoding rules.
+        Please refer to [formatting/encoding rules](https://docs.cometbft.com/v0.38.x/core/using-cometbft.html#formatting)
+        for additional details
 
         Upon success, the `Cache-Control` header will be set with the default
         maximum age.
@@ -886,7 +882,7 @@ paths:
           required: true
           schema:
             type: string
-            example: "tx.height=1000"
+            example: '"tx.height=1000"'
         - in: query
           name: prove
           description: Include proofs of the transactions inclusion in the block
@@ -936,9 +932,9 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
   /block_search:
     get:
-      summary: Search for blocks by BeginBlock and EndBlock events
+      summary: Search for blocks by FinalizeBlock events
       description: |
-        Search for blocks by BeginBlock and EndBlock events.
+        Search for blocks by FinalizeBlock events.
 
         See /subscribe for the query syntax.
       operationId: block_search
@@ -949,7 +945,7 @@ paths:
           required: true
           schema:
             type: string
-            example: "block.height > 1000 AND valset.changed > 0"
+            example: '"block.height > 1000"'
         - in: query
           name: page
           description: "Page number (1-based)"
@@ -1065,7 +1061,7 @@ paths:
           required: true
           schema:
             type: string
-            example: "/a/b/c"
+            example: '"/a/b/c"'
         - in: query
           name: data
           description: Data
@@ -1584,21 +1580,7 @@ components:
                   codespace:
                     type: string
                     example: "ibc"
-            begin_block_events:
-              type: array
-              nullable: true
-              items:
-                type: object
-                properties:
-                  type:
-                    type: string
-                    example: "app"
-                  attributes:
-                    type: array
-                    nullable: false
-                    items:
-                      $ref: "#/components/schemas/Event"
-            end_block_events:
+            finalize_block_events:
               type: array
               nullable: true
               items:
@@ -2434,8 +2416,10 @@ components:
             response:
               required:
                 - "data"
-                - "app_version"
                 - "version"
+                - "app_version"
+                - "last_block_height"
+                - "last_block_app_hash"
               properties:
                 data:
                   type: string
@@ -2445,7 +2429,13 @@ components:
                   example: "0.16.1"
                 app_version:
                   type: string
+                  example: "1"
+                last_block_height:
+                  type: string
                   example: "1314126"
+                last_block_app_hash:
+                  type: string
+                  example: "C9AEBB441B787D9F1D846DE51F3826F4FD386108B59B08239653ABF59455C3F8"
               type: object
           type: object
 
@@ -2812,10 +2802,10 @@ components:
       properties:
         key:
           type: string
-          example: "YWN0aW9u"
+          example: "action"
         value:
           type: string
-          example: "c2VuZA=="
+          example: "send"
         index:
           type: boolean
           example: false

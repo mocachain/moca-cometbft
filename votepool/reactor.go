@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/cosmos/gogoproto/proto"
 	lru "github.com/hashicorp/golang-lru"
 
 	"github.com/cometbft/cometbft/libs/log"
@@ -103,24 +102,24 @@ func (voteR *Reactor) GetChannels() []*conn.ChannelDescriptor {
 }
 
 // Receive implements Reactor.
-func (voteR *Reactor) Receive(chID byte, peer p2p.Peer, msgBytes []byte) {
-	msg := &votepool.Message{}
-	err := proto.Unmarshal(msgBytes, msg)
-	if err != nil {
-		panic(err)
-	}
-	uw, err := msg.Unwrap()
-	if err != nil {
-		panic(err)
-	}
-	voteR.ReceiveEnvelope(p2p.Envelope{
-		ChannelID: chID,
-		Src:       peer,
-		Message:   uw,
-	})
-}
+// func (voteR *Reactor) Receive(chID byte, peer p2p.Peer, msgBytes []byte) {
+// 	msg := &votepool.Message{}
+// 	err := proto.Unmarshal(msgBytes, msg)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	uw, err := msg.Unwrap()
+// 	if err != nil {
+// 		panic(err)
+// 	}
+// 	voteR.ReceiveEnvelope(p2p.Envelope{
+// 		ChannelID: chID,
+// 		Src:       peer,
+// 		Message:   uw,
+// 	})
+// }
 
-func (voteR *Reactor) ReceiveEnvelope(e p2p.Envelope) {
+func (voteR *Reactor) Receive(e p2p.Envelope) {
 	switch msg := e.Message.(type) {
 	case *votepool.Vote:
 		vote := NewVote(msg.PubKey, msg.Signature, uint8(msg.EventType), msg.EventHash)
@@ -172,7 +171,7 @@ func (voteR *Reactor) broadcastVotes(peer p2p.Peer) {
 				}
 			}
 			if needToSend {
-				_ = peer.SendEnvelope(p2p.Envelope{
+				_ = peer.Send(p2p.Envelope{
 					ChannelID: VotePoolChannel,
 					Message: &votepool.Vote{
 						PubKey:    vote.PubKey,
@@ -183,7 +182,7 @@ func (voteR *Reactor) broadcastVotes(peer p2p.Peer) {
 				})
 				voteR.Logger.Debug("Sent vote to", "peer", peer, "vote", vote.Key())
 			}
-		case <-sub.Cancelled():
+		case <-sub.Canceled():
 			return
 		case <-voteR.Quit():
 			return

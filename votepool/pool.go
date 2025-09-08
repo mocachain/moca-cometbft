@@ -256,7 +256,7 @@ func (p *Pool) validatorUpdateRoutine() {
 			changes := validatorData.Data().(types.EventDataValidatorSetUpdates)
 			p.validatorVerifier.updateValidators(changes.ValidatorUpdates)
 			p.Logger.Info("Validators updated", "changes", changes.ValidatorUpdates)
-		case <-sub.Cancelled():
+		case <-sub.Canceled():
 			return
 		case <-p.Quit():
 			return

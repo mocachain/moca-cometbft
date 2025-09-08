@@ -12,7 +12,7 @@ import (
 	"github.com/cometbft/cometbft/libs/service"
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/p2p/conn"
-	cmtp2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
+	tmp2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
 )
 
 type Peer = p2p.Peer
@@ -52,8 +52,7 @@ const (
 	defaultBanTime = 24 * time.Hour
 )
 
-type errMaxAttemptsToDial struct {
-}
+type errMaxAttemptsToDial struct{}
 
 func (e errMaxAttemptsToDial) Error() string {
 	return fmt.Sprintf("reached max attempts %d to dial", maxAttemptsToDial)
@@ -84,6 +83,7 @@ type Reactor struct {
 
 	book              AddrBook
 	config            *ReactorConfig
+	ensurePeersCh     chan struct{} // Wakes up ensurePeersRoutine()
 	ensurePeersPeriod time.Duration // TODO: should go in the config
 
 	// maps to prevent abuse
@@ -132,6 +132,7 @@ func NewReactor(b AddrBook, config *ReactorConfig) *Reactor {
 	r := &Reactor{
 		book:                 b,
 		config:               config,
+		ensurePeersCh:        make(chan struct{}),
 		ensurePeersPeriod:    defaultEnsurePeersPeriod,
 		requestsSent:         cmap.NewCMap(),
 		lastReceivedRequests: cmap.NewCMap(),
@@ -182,7 +183,7 @@ func (r *Reactor) GetChannels() []*conn.ChannelDescriptor {
 			Priority:            1,
 			SendQueueCapacity:   10,
 			RecvMessageCapacity: maxMsgSize,
-			MessageType:         &cmtp2p.Message{},
+			MessageType:         &tmp2p.Message{},
 		},
 	}
 }
@@ -216,7 +217,7 @@ func (r *Reactor) AddPeer(p Peer) {
 }
 
 // RemovePeer implements Reactor by resetting peer's requests info.
-func (r *Reactor) RemovePeer(p Peer, reason interface{}) {
+func (r *Reactor) RemovePeer(p Peer, _ interface{}) {
 	id := string(p.ID())
 	r.requestsSent.Delete(id)
 	r.lastReceivedRequests.Delete(id)
@@ -235,11 +236,11 @@ func (r *Reactor) logErrAddrBook(err error) {
 }
 
 // Receive implements Reactor by handling incoming PEX messages.
-func (r *Reactor) ReceiveEnvelope(e p2p.Envelope) {
+func (r *Reactor) Receive(e p2p.Envelope) {
 	r.Logger.Debug("Received message", "src", e.Src, "chId", e.ChannelID, "msg", e.Message)
 
 	switch msg := e.Message.(type) {
-	case *cmtp2p.PexRequest:
+	case *tmp2p.PexRequest:
 
 		// NOTE: this is a prime candidate for amplification attacks,
 		// so it's important we
@@ -276,7 +277,7 @@ func (r *Reactor) ReceiveEnvelope(e p2p.Envelope) {
 			r.SendAddrs(e.Src, r.book.GetSelection())
 		}
 
-	case *cmtp2p.PexAddrs:
+	case *tmp2p.PexAddrs:
 		// If we asked for addresses, add them to the book
 		addrs, err := p2p.NetAddressesFromProto(msg.Addrs)
 		if err != nil {
@@ -341,9 +342,9 @@ func (r *Reactor) RequestAddrs(p Peer) {
 	}
 	r.Logger.Debug("Request addrs", "from", p)
 	r.requestsSent.Set(id, struct{}{})
-	p.SendEnvelope(p2p.Envelope{
+	p.Send(p2p.Envelope{
 		ChannelID: PexChannel,
-		Message:   &cmtp2p.PexRequest{},
+		Message:   &tmp2p.PexRequest{},
 	})
 }
 
@@ -362,14 +363,6 @@ func (r *Reactor) ReceiveAddrs(addrs []*p2p.NetAddress, src Peer) error {
 		return err
 	}
 
-	srcIsSeed := false
-	for _, seedAddr := range r.seedAddrs {
-		if seedAddr.Equals(srcAddr) {
-			srcIsSeed = true
-			break
-		}
-	}
-
 	for _, netAddr := range addrs {
 		// NOTE: we check netAddr validity and routability in book#AddAddress.
 		err = r.book.AddAddress(netAddr, srcAddr)
@@ -379,21 +372,16 @@ func (r *Reactor) ReceiveAddrs(addrs []*p2p.NetAddress, src Peer) error {
 			// peer here too?
 			continue
 		}
+	}
 
-		// If this address came from a seed node, try to connect to it without
-		// waiting (#2093)
-		if srcIsSeed {
-			go func(addr *p2p.NetAddress) {
-				err := r.dialPeer(addr)
-				if err != nil {
-					switch err.(type) {
-					case errMaxAttemptsToDial, errTooEarlyToDial, p2p.ErrCurrentlyDialingOrExistingAddress:
-						r.Logger.Debug(err.Error(), "addr", addr)
-					default:
-						r.Logger.Debug(err.Error(), "addr", addr)
-					}
-				}
-			}(netAddr)
+	// Try to connect to addresses coming from a seed node without waiting (#2093)
+	for _, seedAddr := range r.seedAddrs {
+		if seedAddr.Equals(srcAddr) {
+			select {
+			case r.ensurePeersCh <- struct{}{}:
+			default:
+			}
+			break
 		}
 	}
 
@@ -404,9 +392,9 @@ func (r *Reactor) ReceiveAddrs(addrs []*p2p.NetAddress, src Peer) error {
 func (r *Reactor) SendAddrs(p Peer, netAddrs []*p2p.NetAddress) {
 	e := p2p.Envelope{
 		ChannelID: PexChannel,
-		Message:   &cmtp2p.PexAddrs{Addrs: p2p.NetAddressesToProto(netAddrs)},
+		Message:   &tmp2p.PexAddrs{Addrs: p2p.NetAddressesToProto(netAddrs)},
 	}
-	p.SendEnvelope(e)
+	p.Send(e)
 }
 
 // SetEnsurePeersPeriod sets period to ensure peers connected.
@@ -437,6 +425,8 @@ func (r *Reactor) ensurePeersRoutine() {
 	for {
 		select {
 		case <-ticker.C:
+			r.ensurePeers()
+		case <-r.ensurePeersCh:
 			r.ensurePeers()
 		case <-r.Quit():
 			ticker.Stop()

@@ -21,6 +21,7 @@ The following metrics are available:
 | **Name**                                   | **Type**  | **Tags**         | **Description**                                                                                                                            |
 |--------------------------------------------|-----------|------------------|--------------------------------------------------------------------------------------------------------------------------------------------|
 | abci\_connection\_method\_timing\_seconds  | Histogram | method, type     | Timings for each of the ABCI methods                                                                                                       |
+| blocksync\_syncing                         | Gauge     |                  | Either 0 (not block syncing) or 1 (syncing)                                                                                                |
 | consensus\_height                          | Gauge     |                  | Height of the chain                                                                                                                        |
 | consensus\_validators                      | Gauge     |                  | Number of validators                                                                                                                       |
 | consensus\_validators\_power               | Gauge     |                  | Total voting power of all validators                                                                                                       |
@@ -37,14 +38,13 @@ The following metrics are available:
 | consensus\_total\_txs                      | Gauge     |                  | Total number of transactions committed                                                                                                     |
 | consensus\_block\_parts                    | Counter   | peer\_id         | Number of blockparts transmitted by peer                                                                                                   |
 | consensus\_latest\_block\_height           | Gauge     |                  | /status sync\_info number                                                                                                                  |
-| consensus\_block\_syncing                  | Gauge     |                  | Either 0 (not block syncing) or 1 (syncing)                                                                                                |
-| consensus\_state\_syncing                  | Gauge     |                  | Either 0 (not state syncing) or 1 (syncing)                                                                                                |
 | consensus\_block\_size\_bytes              | Gauge     |                  | Block size in bytes                                                                                                                        |
 | consensus\_step\_duration                  | Histogram | step             | Histogram of durations for each step in the consensus protocol                                                                             |
 | consensus\_round\_duration                 | Histogram |                  | Histogram of durations for all the rounds that have occurred since the process started                                                     |
 | consensus\_block\_gossip\_parts\_received  | Counter   | matches\_current | Number of block parts received by the node                                                                                                 |
 | consensus\_quorum\_prevote\_delay          | Gauge     |                  | Interval in seconds between the proposal timestamp and the timestamp of the earliest prevote that achieved a quorum                        |
 | consensus\_full\_prevote\_delay            | Gauge     |                  | Interval in seconds between the proposal timestamp and the timestamp of the latest prevote in a round where all validators voted           |
+| consensus\_vote\_extension\_receive\_count | Counter   | status           | Number of vote extensions received                                                                                                         |
 | consensus\_proposal\_receive\_count        | Counter   | status           | Total number of proposals received by the node since process start                                                                         |
 | consensus\_proposal\_create\_count         | Counter   |                  | Total number of proposals created by the node since process start                                                                          |
 | consensus\_round\_voting\_power\_percent   | Gauge     | vote\_type       | A value between 0 and 1.0 representing the percentage of the total voting power per vote type received within a round                      |
@@ -61,9 +61,10 @@ The following metrics are available:
 | mempool\_tx\_size\_bytes                   | Histogram |                  | Transaction sizes in bytes                                                                                                                 |
 | mempool\_failed\_txs                       | Counter   |                  | Number of failed transactions                                                                                                              |
 | mempool\_recheck\_times                    | Counter   |                  | Number of transactions rechecked in the mempool                                                                                            |
-| state\_block\_processing\_time             | Histogram |                  | Time between BeginBlock and EndBlock in ms                                                                                                 |
+| state\_block\_processing\_time             | Histogram |                  | Time spent processing FinalizeBlock in ms                                                                                                 |
 | state\_consensus\_param\_updates           | Counter   |                  | Number of consensus parameter updates returned by the application since process start                                                      |
 | state\_validator\_set\_updates             | Counter   |                  | Number of validator set updates returned by the application since process start                                                            |
+| statesync\_syncing                         | Gauge     |                  | Either 0 (not state syncing) or 1 (syncing)                                                                                                |
 
 ## Useful queries
 

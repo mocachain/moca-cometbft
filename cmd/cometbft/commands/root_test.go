@@ -17,30 +17,12 @@ import (
 	cmtos "github.com/cometbft/cometbft/libs/os"
 )
 
-var (
-	defaultRoot = os.ExpandEnv("$HOME/.some/test/dir")
-)
-
 // clearConfig clears env vars, the given root dir, and resets viper.
-func clearConfig(dir string) {
-	if err := os.Unsetenv("CMTHOME"); err != nil {
-		panic(err)
-	}
-	if err := os.Unsetenv("CMT_HOME"); err != nil {
-		panic(err)
-	}
-	if err := os.Unsetenv("TMHOME"); err != nil {
-		//XXX: Deprecated.
-		panic(err)
-	}
-	if err := os.Unsetenv("TM_HOME"); err != nil {
-		//XXX: Deprecated.
-		panic(err)
-	}
+func clearConfig(t *testing.T, dir string) {
+	os.Clearenv()
+	err := os.RemoveAll(dir)
+	require.NoError(t, err)
 
-	if err := os.RemoveAll(dir); err != nil {
-		panic(err)
-	}
 	viper.Reset()
 	config = cfg.DefaultConfig()
 }
@@ -58,11 +40,11 @@ func testRootCmd() *cobra.Command {
 	return rootCmd
 }
 
-func testSetup(rootDir string, args []string, env map[string]string) error {
-	clearConfig(defaultRoot)
+func testSetup(t *testing.T, root string, args []string, env map[string]string) error {
+	clearConfig(t, root)
 
 	rootCmd := testRootCmd()
-	cmd := cli.PrepareBaseCmd(rootCmd, "CMT", defaultRoot)
+	cmd := cli.PrepareBaseCmd(rootCmd, "CMT", root)
 
 	// run with the args and env
 	args = append([]string{rootCmd.Use}, args...)
@@ -70,22 +52,27 @@ func testSetup(rootDir string, args []string, env map[string]string) error {
 }
 
 func TestRootHome(t *testing.T) {
-	newRoot := filepath.Join(defaultRoot, "something-else")
+	tmpDir := os.TempDir()
+	root := filepath.Join(tmpDir, "adir")
+	newRoot := filepath.Join(tmpDir, "something-else")
+	defer clearConfig(t, root)
+	defer clearConfig(t, newRoot)
+
 	cases := []struct {
 		args []string
 		env  map[string]string
 		root string
 	}{
-		{nil, nil, defaultRoot},
+		{nil, nil, root},
 		{[]string{"--home", newRoot}, nil, newRoot},
-		{nil, map[string]string{"TMHOME": newRoot}, newRoot}, //XXX: Deprecated.
+		{nil, map[string]string{"TMHOME": newRoot}, newRoot}, // XXX: Deprecated.
 		{nil, map[string]string{"CMTHOME": newRoot}, newRoot},
 	}
 
 	for i, tc := range cases {
-		idxString := strconv.Itoa(i)
+		idxString := "idx: " + strconv.Itoa(i)
 
-		err := testSetup(defaultRoot, tc.args, tc.env)
+		err := testSetup(t, root, tc.args, tc.env)
 		require.Nil(t, err, idxString)
 
 		assert.Equal(t, tc.root, config.RootDir, idxString)
@@ -96,7 +83,6 @@ func TestRootHome(t *testing.T) {
 }
 
 func TestRootFlagsEnv(t *testing.T) {
-
 	// defaults
 	defaults := cfg.DefaultConfig()
 	defaultLogLvl := defaults.LogLevel
@@ -118,8 +104,10 @@ func TestRootFlagsEnv(t *testing.T) {
 
 	for i, tc := range cases {
 		idxString := strconv.Itoa(i)
-
-		err := testSetup(defaultRoot, tc.args, tc.env)
+		root := filepath.Join(os.TempDir(), "adir2_"+idxString)
+		idxString = "idx: " + idxString
+		defer clearConfig(t, root)
+		err := testSetup(t, root, tc.args, tc.env)
 		require.Nil(t, err, idxString)
 
 		assert.Equal(t, tc.logLevel, config.LogLevel, idxString)
@@ -127,7 +115,6 @@ func TestRootFlagsEnv(t *testing.T) {
 }
 
 func TestRootConfig(t *testing.T) {
-
 	// write non-default config
 	nonDefaultLogLvl := "abc:debug"
 	cvals := map[string]string{
@@ -148,11 +135,12 @@ func TestRootConfig(t *testing.T) {
 
 	for i, tc := range cases {
 		idxString := strconv.Itoa(i)
-		clearConfig(defaultRoot)
-
+		root := filepath.Join(os.TempDir(), "adir3_"+idxString)
+		idxString = "idx: " + idxString
+		defer clearConfig(t, root)
 		// XXX: path must match cfg.defaultConfigPath
-		configFilePath := filepath.Join(defaultRoot, "config")
-		err := cmtos.EnsureDir(configFilePath, 0700)
+		configFilePath := filepath.Join(root, "config")
+		err := cmtos.EnsureDir(configFilePath, 0o700)
 		require.Nil(t, err)
 
 		// write the non-defaults to a different path
@@ -161,7 +149,7 @@ func TestRootConfig(t *testing.T) {
 		require.Nil(t, err)
 
 		rootCmd := testRootCmd()
-		cmd := cli.PrepareBaseCmd(rootCmd, "CMT", defaultRoot)
+		cmd := cli.PrepareBaseCmd(rootCmd, "CMT", root)
 
 		// run with the args and env
 		tc.args = append([]string{rootCmd.Use}, tc.args...)
@@ -180,5 +168,5 @@ func WriteConfigVals(dir string, vals map[string]string) error {
 		data += fmt.Sprintf("%s = \"%s\"\n", k, v)
 	}
 	cfile := filepath.Join(dir, "config.toml")
-	return os.WriteFile(cfile, []byte(data), 0600)
+	return os.WriteFile(cfile, []byte(data), 0o600)
 }

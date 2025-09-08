@@ -13,7 +13,7 @@ import (
 	"github.com/cometbft/cometbft/crypto"
 	"github.com/cometbft/cometbft/libs/protoio"
 	"github.com/cometbft/cometbft/p2p/conn"
-	cmtp2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
+	tmp2p "github.com/cometbft/cometbft/proto/tendermint/p2p"
 )
 
 const (
@@ -216,6 +216,11 @@ func (mt *MultiplexTransport) Dial(
 	c, err := addr.DialTimeout(mt.dialTimeout)
 	if err != nil {
 		return nil, err
+	}
+
+	if mt.mConfig.TestFuzz {
+		// so we have time to do peer handshakes and get set up.
+		c = FuzzConnAfterFromConfig(c, 10*time.Second, mt.mConfig.TestFuzzConfig)
 	}
 
 	// TODO(xla): Evaluate if we should apply filters if we explicitly dial.
@@ -545,7 +550,7 @@ func handshake(
 	var (
 		errc = make(chan error, 2)
 
-		pbpeerNodeInfo cmtp2p.DefaultNodeInfo
+		pbpeerNodeInfo tmp2p.DefaultNodeInfo
 		peerNodeInfo   DefaultNodeInfo
 		ourNodeInfo    = nodeInfo.(DefaultNodeInfo)
 	)

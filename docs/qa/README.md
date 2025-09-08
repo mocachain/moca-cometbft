@@ -3,7 +3,7 @@ order: 1
 parent:
   title: CometBFT Quality Assurance
   description: This is a report on the process followed and results obtained when running v0.34.x on testnets
-  order: 2
+  order: 6
 ---
 
 # CometBFT Quality Assurance
@@ -23,3 +23,4 @@ The following releases have undergone the Quality Assurance process, and the cor
 * [v0.34.x](CometBFT-QA-34.md) - Tested prior to releasing v0.34.27, using TM v0.34.x results as baseline.
 * [TM v0.37.x](TMCore-QA-37.md) - Tested prior to releasing TM v0.37.x, using TM v0.34.x results as baseline.
 * [v0.37.x](CometBFT-QA-37.md) - Tested on CometBFT v0.37.0-alpha3, using TM v0.37.x results as baseline.
+* [v0.38.x](CometBFT-QA-38.md) - Tested on v0.38.0-alpha.2, using v0.37.x results as baseline.

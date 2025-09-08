@@ -145,6 +145,7 @@ func main() {
 		log.Fatalf("Generating code: %v", err)
 	}
 }
+
 func ignoreTestFiles(f fs.FileInfo) bool {
 	return !strings.Contains(f.Name(), "_test.go")
 }
@@ -167,7 +168,9 @@ func ParseMetricsDir(dir string, structName string) (TemplateData, error) {
 
 	// Grab the package name.
 	var pkgName string
-	var pkg *ast.Package
+	var pkg *ast.Package //nolint:staticcheck
+	// TODO(thane): Figure out a more readable way of implementing this.
+	//nolint:revive
 	for pkgName, pkg = range d {
 	}
 	td := TemplateData{
@@ -210,9 +213,7 @@ func GenerateMetricsFile(w io.Writer, td TemplateData) error {
 }
 
 func findMetricsStruct(files map[string]*ast.File, structName string) (*ast.StructType, string, error) {
-	var (
-		st *ast.StructType
-	)
+	var st *ast.StructType
 	for _, file := range files {
 		mPkgName, err := extractMetricsPackageName(file.Imports)
 		if err != nil {

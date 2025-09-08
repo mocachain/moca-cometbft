@@ -17,7 +17,7 @@ You are expected to have read all previous sections of ABCI++ specification, nam
 ## Message Protocol and Synchrony
 
 The message protocol consists of pairs of requests and responses defined in the
-[protobuf file](https://github.com/cometbft/cometbft/blob/v0.37.x/proto/tendermint/abci/types.proto).
+[protobuf file](https://github.com/cometbft/cometbft/blob/v0.38.x/proto/tendermint/abci/types.proto).
 
 Some messages have no fields, while others may include byte-arrays, strings, integers,
 or custom protobuf types.
@@ -46,7 +46,7 @@ The implementations in CometBFT's repository can be tested using `abci-cli` by s
 the `--abci` flag appropriately.
 
 See examples, in various stages of maintenance, in
-[Go](https://github.com/cometbft/cometbft/tree/v0.37.x/abci/server),
+[Go](https://github.com/cometbft/cometbft/tree/master/abci/server),
 [JavaScript](https://github.com/tendermint/js-abci),
 [C++](https://github.com/mdyring/cpp-tmsp), and
 [Java](https://github.com/jTendermint/jabci).
