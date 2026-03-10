@@ -127,7 +127,10 @@ func validateBlock(state State, block *types.Block, skipAppHashVerify bool) erro
 				state.LastBlockTime,
 			)
 		}
-		medianTime := MedianTime(block.LastCommit, state.LastValidators)
+		medianTime, err := MedianTime(block.LastCommit, state.LastValidators)
+		if err != nil {
+			return err
+		}
 		if !block.Time.Equal(medianTime) {
 			return fmt.Errorf("invalid block time. Expected %v, got %v",
 				medianTime,
