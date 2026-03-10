@@ -142,7 +142,8 @@ func TestFinalizeBlockDecidedLastCommit(t *testing.T) {
 
 			// block for height 2
 			reveal := makeReveal(state, state.Validators.Proposer.Address, privVals, 2)
-			block := state.MakeBlock(2, test.MakeNTxs(state.LastBlockHeight, 10), lastCommit.ToCommit(), nil, reveal, state.Validators.Proposer.Address)
+			block, err := state.MakeBlock(2, test.MakeNTxs(state.LastBlockHeight, 10), lastCommit.ToCommit(), nil, reveal, state.Validators.Proposer.Address)
+			require.NoError(t, err)
 			// block := makeBlock(state, 2, lastCommit.ToCommit())
 			bps, err := block.MakePartSet(testPartSize)
 			require.NoError(t, err)

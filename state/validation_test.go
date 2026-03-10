@@ -101,9 +101,10 @@ func TestValidateBlockHeader(t *testing.T) {
 			Invalid blocks don't pass
 		*/
 		for _, tc := range testCases {
-			block := makeBlock(state, height, lastCommit)
+			block, err := makeBlock(state, height, lastCommit)
+			require.NoError(t, err)
 			tc.malleateBlock(block)
-			err := blockExec.ValidateBlock(state, block, false)
+			err = blockExec.ValidateBlock(state, block, false)
 			require.Error(t, err, tc.name)
 		}
 
@@ -119,10 +120,11 @@ func TestValidateBlockHeader(t *testing.T) {
 
 	nextHeight := validationTestsStopHeight
 	reveal := makeReveal(state, state.Validators.Proposer.Address, privVals, nextHeight)
-	block := state.MakeBlock(nextHeight, test.MakeNTxs(state.LastBlockHeight, 10), lastCommit, nil, reveal, state.Validators.Proposer.Address)
+	block, err := state.MakeBlock(nextHeight, test.MakeNTxs(state.LastBlockHeight, 10), lastCommit, nil, reveal, state.Validators.Proposer.Address)
+	require.NoError(t, err)
 	// block := makeBlock(state, nextHeight, lastCommit)
 	state.InitialHeight = nextHeight + 1
-	err := blockExec.ValidateBlock(state, block, false)
+	err = blockExec.ValidateBlock(state, block, false)
 	require.Error(t, err, "expected an error when state is ahead of block")
 	assert.Contains(t, err.Error(), "lower than initial height")
 }
@@ -188,15 +190,17 @@ func TestValidateBlockCommit(t *testing.T) {
 				BlockID:    state.LastBlockID,
 				Signatures: []types.CommitSig{wrongHeightVote.CommitSig()},
 			}
-			block := makeBlock(state, height, wrongHeightCommit)
-			err := blockExec.ValidateBlock(state, block, false)
+			block, err := makeBlock(state, height, wrongHeightCommit)
+			require.NoError(t, err)
+			err = blockExec.ValidateBlock(state, block, false)
 			_, isErrInvalidCommitHeight := err.(types.ErrInvalidCommitHeight)
 			require.True(t, isErrInvalidCommitHeight, "expected ErrInvalidCommitHeight at height %d but got: %v", height, err)
 
 			/*
 				#2589: test len(block.LastCommit.Signatures) == state.LastValidators.Size()
 			*/
-			block = makeBlock(state, height, wrongSigsCommit)
+			block, err = makeBlock(state, height, wrongSigsCommit)
+			require.NoError(t, err)
 			err = blockExec.ValidateBlock(state, block, false)
 			_, isErrInvalidCommitSignatures := err.(types.ErrInvalidCommitSignatures)
 			require.True(t, isErrInvalidCommitSignatures,
@@ -331,8 +335,9 @@ func TestValidateBlockEvidence(t *testing.T) {
 				currentBytes += int64(len(newEv.Bytes()))
 			}
 			reveal := makeReveal(state, proposerAddr, privVals, height)
-			block := state.MakeBlock(height, test.MakeNTxs(height, 10), lastCommit, evidence, reveal, proposerAddr)
-			err := blockExec.ValidateBlock(state, block, false)
+			block, err := state.MakeBlock(height, test.MakeNTxs(height, 10), lastCommit, evidence, reveal, proposerAddr)
+			require.NoError(t, err)
+			err = blockExec.ValidateBlock(state, block, false)
 			if assert.Error(t, err) {
 				_, ok := err.(*types.ErrEvidenceOverflow)
 				require.True(t, ok, "expected error to be of type ErrEvidenceOverflow at height %d but got %v", height, err)

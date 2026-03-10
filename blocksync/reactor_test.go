@@ -142,7 +142,8 @@ func newReactor(
 		reveal := &cmtproto.Reveal{Height: blockHeight}
 		_ = privVals[0].SignReveal(state.ChainID, reveal)
 
-		thisBlock := state.MakeBlock(blockHeight, nil, lastExtCommit.ToCommit(), nil, reveal.Signature, state.Validators.Proposer.Address)
+		thisBlock, err := state.MakeBlock(blockHeight, nil, lastExtCommit.ToCommit(), nil, reveal.Signature, state.Validators.Proposer.Address)
+		require.NoError(t, err)
 
 		thisParts, err := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		require.NoError(t, err)

@@ -29,15 +29,9 @@ func DefaultDBProvider(ctx *DBContext) (dbm.DB, error) {
 	return dbm.NewDB(ctx.ID, dbType, ctx.Config.DBDir())
 }
 
-func DefaultDBProviderWithDBOptions(externalDBOpts map[string]*dbm.NewDatabaseOption) func(ctx *DBContext) (dbm.DB, error) {
-	if externalDBOpts == nil {
-		return DefaultDBProvider
-	}
-	return func(ctx *DBContext) (dbm.DB, error) {
-		dbType := dbm.BackendType(ctx.Config.DBBackend)
-		if dbOpts, ok := externalDBOpts[ctx.ID]; ok {
-			return dbm.NewDB(ctx.ID, dbType, ctx.Config.DBDir(), dbOpts)
-		}
-		return dbm.NewDB(ctx.ID, dbType, ctx.Config.DBDir())
-	}
+// DefaultDBProviderWithDBOptions returns a database provider that ignores options
+// (cometbft-db's NewDB doesn't support options in this version)
+func DefaultDBProviderWithDBOptions(externalDBOpts map[string]interface{}) func(ctx *DBContext) (dbm.DB, error) {
+	// Options are ignored as cometbft-db's NewDB doesn't support them
+	return DefaultDBProvider
 }
