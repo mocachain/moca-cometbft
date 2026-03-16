@@ -309,11 +309,11 @@ require (
 )
 
 replace (
-	github.com/0xPolygon/polygon-edge => ../polygon-edge
+	github.com/0xPolygon/polygon-edge => github.com/mocachain/polygon-edge v0.0.0-20251101014808-391be2ac88a2
 	github.com/btcsuite/btcd => github.com/btcsuite/btcd v0.22.1
 	github.com/btcsuite/btcd/btcec/v2 => github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/btcsuite/btcd/btcutil => github.com/btcsuite/btcd/btcutil v1.1.2
-	github.com/cometbft/cometbft-db => ../moca-cometbft-db
+	github.com/cometbft/cometbft-db => github.com/mocachain/moca-cometbft-db v0.0.0-20260316053933-22256c4c85b3
 	// to be compatible with rocksdb v6.22.1
 	github.com/linxGnu/grocksdb => github.com/linxGnu/grocksdb v1.6.22
 	github.com/wercker/journalhook => github.com/wercker/journalhook v0.0.0-20230927020745-64542ffa4117
