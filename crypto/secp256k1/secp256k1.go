@@ -105,7 +105,10 @@ func GenPrivKeySecp256k1(secret []byte) PrivKey {
 func (privKey PrivKey) Sign(msg []byte) ([]byte, error) {
 	priv, _ := secp256k1.PrivKeyFromBytes(privKey)
 	hash := sha256.Sum256(msg)
-	sig := ecdsa.SignCompact(priv, hash[:], false)
+	sig, err := ecdsa.SignCompact(priv, hash[:], false)
+	if err != nil {
+		return nil, err
+	}
 	// remove the first byte which is compactSigRecoveryCode
 	return sig[1:], nil
 }
