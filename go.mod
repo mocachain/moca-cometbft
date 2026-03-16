@@ -311,7 +311,7 @@ require (
 replace (
 	github.com/0xPolygon/polygon-edge => ../polygon-edge
 	github.com/btcsuite/btcd => github.com/btcsuite/btcd v0.22.1
-	github.com/btcsuite/btcd/btcec/v2 => github.com/btcsuite/btcd/btcec/v2 v2.3.2
+	github.com/btcsuite/btcd/btcec/v2 => github.com/btcsuite/btcd/btcec/v2 v2.3.4
 	github.com/btcsuite/btcd/btcutil => github.com/btcsuite/btcd/btcutil v1.1.2
 	github.com/cometbft/cometbft-db => ../moca-cometbft-db
 	// to be compatible with rocksdb v6.22.1
