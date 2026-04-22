@@ -67,7 +67,8 @@ func TestApplyBlock(t *testing.T) {
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
 		mp, sm.EmptyEvidencePool{}, blockStore)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
@@ -224,7 +225,8 @@ func TestFinalizeBlockValidators(t *testing.T) {
 		}
 
 		// block for height 2
-		block := makeBlock(state, 2, lastCommit.ToCommit())
+		block, err := makeBlock(state, 2, lastCommit.ToCommit())
+		require.NoError(t, err)
 
 		_, err = sm.ExecCommitBlock(proxyApp.Consensus(), block, log.TestingLogger(), stateStore, 1)
 		require.NoError(t, err, tc.desc)
@@ -349,7 +351,8 @@ func TestFinalizeBlockMisbehavior(t *testing.T) {
 	blockExec := sm.NewBlockExecutor(stateStore, log.TestingLogger(), proxyApp.Consensus(),
 		mp, evpool, blockStore)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	block.Evidence = types.EvidenceData{Evidence: ev}
 	block.Header.EvidenceHash = block.Evidence.Hash()
 	bps, err := block.MakePartSet(testPartSize)
@@ -396,7 +399,8 @@ func TestProcessProposal(t *testing.T) {
 		blockStore,
 	)
 
-	block0 := makeBlock(state, height-1, new(types.Commit))
+	block0, err := makeBlock(state, height-1, new(types.Commit))
+	require.NoError(t, err)
 	lastCommitSig := []types.CommitSig{}
 	partSet, err := block0.MakePartSet(types.BlockPartSizeBytes)
 	require.NoError(t, err)
@@ -419,10 +423,11 @@ func TestProcessProposal(t *testing.T) {
 		lastCommitSig = append(lastCommitSig, vote.CommitSig())
 	}
 
-	block1 := makeBlock(state, height, &types.Commit{
+	block1, err := makeBlock(state, height, &types.Commit{
 		Height:     height - 1,
 		Signatures: lastCommitSig,
 	})
+	require.NoError(t, err)
 
 	block1.Txs = txs
 
@@ -658,7 +663,8 @@ func TestFinalizeBlockValidatorUpdates(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
@@ -741,7 +747,8 @@ func TestFinalizeBlockValidatorUpdatesResultingInEmptySet(t *testing.T) {
 		blockStore,
 	)
 
-	block := makeBlock(state, 1, new(types.Commit))
+	block, err := makeBlock(state, 1, new(types.Commit))
+	require.NoError(t, err)
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 	blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
@@ -1149,7 +1156,8 @@ func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
 				sm.EmptyEvidencePool{},
 				blockStore,
 			)
-			block := makeBlock(state, testCase.height, new(types.Commit))
+			block, err := makeBlock(state, testCase.height, new(types.Commit))
+			require.NoError(t, err)
 
 			bps, err := block.MakePartSet(testPartSize)
 			require.NoError(t, err)
