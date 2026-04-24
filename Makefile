@@ -304,8 +304,9 @@ lint-changed: check-go-env check-lint
 	elif [ -z "$$changed_files" ]; then \
 		echo "--> No local changed Go files to lint"; \
 	else \
-		echo "--> Running golangci-lint on local changed Go files..."; \
-		$(GOLANGCI_LINT) run --timeout 10m -v $$changed_files; \
+		changed_dirs="$$(printf '%s\n' "$$changed_files" | xargs -n1 dirname | sed 's#^\.$$#./.#' | sed 's#^[^./]#./&#' | sort -u)"; \
+		echo "--> Running golangci-lint on local changed Go packages..."; \
+		$(GOLANGCI_LINT) run --timeout 10m -v $$changed_dirs; \
 	fi
 .PHONY: lint-changed
 
@@ -318,8 +319,9 @@ lint-staged: check-go-env check-lint
 	elif [ -z "$$staged_files" ]; then \
 		echo "--> No staged Go files to lint"; \
 	else \
-		echo "--> Running golangci-lint on staged Go files..."; \
-		$(GOLANGCI_LINT) run --timeout 10m -v $$staged_files; \
+		staged_dirs="$$(printf '%s\n' "$$staged_files" | xargs -n1 dirname | sed 's#^\.$$#./.#' | sed 's#^[^./]#./&#' | sort -u)"; \
+		echo "--> Running golangci-lint on staged Go packages..."; \
+		$(GOLANGCI_LINT) run --timeout 10m -v $$staged_dirs; \
 	fi
 .PHONY: lint-staged
 

@@ -131,7 +131,7 @@ func TestFinalizeBlockResponsesSaveLoad1(t *testing.T) {
 
 	abciResponses.AppHash = make([]byte, 1)
 
-	err := stateStore.SaveFinalizeBlockResponse(block.Height, abciResponses)
+	err = stateStore.SaveFinalizeBlockResponse(block.Height, abciResponses)
 	require.NoError(t, err)
 	loadedABCIResponses, err := stateStore.LoadFinalizeBlockResponse(block.Height)
 	assert.NoError(err)
