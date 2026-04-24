@@ -3,6 +3,14 @@ include common.mk
 PACKAGES=$(shell go list ./...)
 BUILDDIR?=$(CURDIR)/build
 OUTPUT?=$(BUILDDIR)/cometbft
+GO ?= $(shell command -v go 2>/dev/null || echo go)
+GO_LOCAL_ENV ?= env -u GOROOT GOTOOLCHAIN=local
+GO_GOPATH ?= $(shell $(GO_LOCAL_ENV) $(GO) env GOPATH 2>/dev/null)
+GO_BIN ?= $(or $(GOBIN),$(if $(GO_GOPATH),$(GO_GOPATH)/bin,$(HOME)/go/bin))
+LEFTHOOK ?= $(GO_BIN)/lefthook
+LEFTHOOK_VERSION ?= v1.11.3
+GOLANGCI_LINT ?= $(GO_BIN)/golangci-lint
+GOLANGCI_LINT_VERSION ?= v1.64.8
 
 HTTPS_GIT := https://github.com/cometbft/cometbft.git
 CGO_ENABLED ?= 1
@@ -87,6 +95,17 @@ build:
 install:
 	CGO_ENABLED=$(CGO_ENABLED) go install $(BUILD_FLAGS) -tags $(BUILD_TAGS) ./cmd/cometbft
 .PHONY: install
+
+#? hooks: Install git hooks managed by lefthook
+hooks:
+	@if [ ! -x "$(LEFTHOOK)" ]; then \
+		echo "--> Installing lefthook $(LEFTHOOK_VERSION) into $(GO_BIN)"; \
+		$(GO_LOCAL_ENV) GOBIN=$(GO_BIN) $(GO) install github.com/evilmartians/lefthook@$(LEFTHOOK_VERSION); \
+	else \
+		echo "--> Using lefthook binary: $(LEFTHOOK)"; \
+	fi
+	@$(LEFTHOOK) install
+.PHONY: hooks
 
 ###############################################################################
 ###                               Metrics                                   ###
@@ -247,11 +266,70 @@ format:
 	find . -name '*.go' -type f -not -path "*.git*"  -not -name '*.pb.go' -not -name '*pb_test.go' | xargs goimports -w -local github.com/cometbft/cometbft
 .PHONY: format
 
-#? lint: Run latest golangci-lint linter
-lint:
+#? check-go-env: Show the Go binary used for local lint tooling
+check-go-env:
+	@echo "--> Using Go binary: $(GO)"
+	@$(GO_LOCAL_ENV) $(GO) version
+	@echo "--> Ignoring external GOROOT for repository commands"
+.PHONY: check-go-env
+
+#? install-lint: Install the local golangci-lint binary used by make lint
+install-lint:
+	@$(GO_LOCAL_ENV) GOBIN=$(GO_BIN) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+.PHONY: install-lint
+
+#? check-lint: Verify the local golangci-lint binary used by make lint
+check-lint:
+	@if [ ! -x "$(GOLANGCI_LINT)" ]; then \
+		echo "golangci-lint not found at $(GOLANGCI_LINT)"; \
+		echo "Run 'make install-lint' first."; \
+		exit 1; \
+	fi
+	@echo "--> Using golangci-lint binary: $(GOLANGCI_LINT)"
+	@$(GOLANGCI_LINT) version
+.PHONY: check-lint
+
+#? lint: Run the local golangci-lint binary
+lint: check-go-env check-lint
 	@echo "--> Running linter"
-	@go run github.com/golangci/golangci-lint/cmd/golangci-lint@latest run
+	@$(GOLANGCI_LINT) run --timeout 10m -v
 .PHONY: lint
+
+#? lint-changed: Run golangci-lint on local changed Go files
+lint-changed: check-go-env check-lint
+	@changed_files="$$( { git diff --name-only --diff-filter=ACMR HEAD; git ls-files --others --exclude-standard; } | grep '\.go$$' | sort -u || true )"; \
+	if { git diff --name-only --diff-filter=ACMR HEAD; git ls-files --others --exclude-standard; } | grep -Eq '(^|/)(go\.mod|go\.sum)$$'; then \
+		echo "--> go.mod/go.sum changed; running full golangci-lint..."; \
+		$(GOLANGCI_LINT) run --timeout 10m -v; \
+	elif [ -z "$$changed_files" ]; then \
+		echo "--> No local changed Go files to lint"; \
+	else \
+		echo "--> Running golangci-lint on local changed Go files..."; \
+		$(GOLANGCI_LINT) run --timeout 10m -v $$changed_files; \
+	fi
+.PHONY: lint-changed
+
+#? lint-staged: Run golangci-lint on staged Go files
+lint-staged: check-go-env check-lint
+	@staged_files="$$(git diff --cached --name-only --diff-filter=ACMR | grep '\.go$$' || true)"; \
+	if git diff --cached --name-only --diff-filter=ACMR | grep -Eq '(^|/)(go\.mod|go\.sum)$$'; then \
+		echo "--> go.mod/go.sum changed; running full golangci-lint..."; \
+		$(GOLANGCI_LINT) run --timeout 10m -v; \
+	elif [ -z "$$staged_files" ]; then \
+		echo "--> No staged Go files to lint"; \
+	else \
+		echo "--> Running golangci-lint on staged Go files..."; \
+		$(GOLANGCI_LINT) run --timeout 10m -v $$staged_files; \
+	fi
+.PHONY: lint-staged
+
+#? pre-commit: Run local checks that are safe to execute before commit
+pre-commit: lint-changed
+.PHONY: pre-commit
+
+#? pre-commit-staged: Run staged checks used by git hook
+pre-commit-staged: lint-staged
+.PHONY: pre-commit-staged
 
 # https://github.com/cometbft/cometbft/pull/1925#issuecomment-1875127862
 # Revisit using lint-format after CometBFT v1 release and/or after 2024-06-01.

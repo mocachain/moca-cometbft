@@ -9,7 +9,24 @@ on:
     - cron: '0 2 * * *'
 
 jobs:
+  check-release-branch:
+    runs-on: ubuntu-latest
+    outputs:
+      exists: ${{ steps.check.outputs.exists }}
+    steps:
+      - id: check
+        env:
+          RELEASE_BRANCH: v0.37.x
+        run: |
+          if git ls-remote --exit-code --heads "https://github.com/${{ github.repository }}.git" "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
   e2e-nightly-test:
+    needs: check-release-branch
+    if: needs.check-release-branch.outputs.exists == 'true'
     # Run parallel jobs for the listed testnet groups (must match the
     # ./build/generator -g flag)
     strategy:
