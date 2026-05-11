@@ -45,7 +45,9 @@ jobs:
       - run: |
           go mod tidy
           go mod download
+      - name: Install Gosec
+        run: |
+          GOBIN="$RUNNER_TEMP/bin" go install github.com/securego/gosec/v2/cmd/gosec@v2.17.0
       - name: Run Gosec Security Scanner
-        uses: securego/gosec@master
-        with:
-          args: -quiet -confidence high -severity high ./...
+        run: |
+          "$RUNNER_TEMP/bin/gosec" -quiet -confidence high -severity high ./...
