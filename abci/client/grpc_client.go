@@ -179,34 +179,6 @@ func (cli *grpcClient) finishAsyncCall(req *types.Request, res *types.Response) 
 	return reqres
 }
 
-// finishSyncCall waits for an async call to complete. It is necessary to call all
-// sync calls asynchronously as well, to maintain call and response ordering via
-// the channel, and this method will wait until the async call completes.
-func (cli *grpcClient) finishSyncCall(reqres *ReqRes) *types.Response {
-	// It's possible that the callback is called twice, since the callback can
-	// be called immediately on SetCallback() in addition to after it has been
-	// set. This is because completing the ReqRes happens in a separate critical
-	// section from the one where the callback is called: there is a race where
-	// SetCallback() is called between completing the ReqRes and dispatching the
-	// callback.
-	//
-	// We also buffer the channel with 1 response, since SetCallback() will be
-	// called synchronously if the reqres is already completed, in which case
-	// it will block on sending to the channel since it hasn't gotten around to
-	// receiving from it yet.
-	//
-	// ReqRes should really handle callback dispatch internally, to guarantee
-	// that it's only called once and avoid the above race conditions.
-	var once sync.Once
-	ch := make(chan *types.Response, 1)
-	reqres.SetCallback(func(res *types.Response) {
-		once.Do(func() {
-			ch <- res
-		})
-	})
-	return <-ch
-}
-
 // ----------------------------------------
 
 func (cli *grpcClient) Flush(ctx context.Context) error {
