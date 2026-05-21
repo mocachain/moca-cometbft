@@ -676,8 +676,6 @@ func (n *Node) ConfigureRPC() (*rpccore.Environment, error) {
 		ProxyAppQuery:   n.proxyApp.Query(),
 		ProxyAppMempool: n.proxyApp.Mempool(),
 
-		ProxyAppEthQuery: n.proxyApp.EthQuery(),
-
 		StateStore:     n.stateStore,
 		BlockStore:     n.blockStore,
 		EvidencePool:   n.evidencePool,
