@@ -358,6 +358,10 @@ func (l *LightClientAttackEvidence) ValidateBasic() error {
 	}
 
 	// this check needs to be done before we can run validate basic
+	// Synced from upstream CometBFT v0.38.x.
+	if l.ConflictingBlock.SignedHeader == nil {
+		return errors.New("conflicting block missing signed header")
+	}
 	if l.ConflictingBlock.Header == nil {
 		return errors.New("conflicting block missing header")
 	}
