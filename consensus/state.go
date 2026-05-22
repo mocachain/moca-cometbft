@@ -2201,6 +2201,16 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 			// Here, we verify the signature of the vote extension included in the vote
 			// message.
 			_, val := cs.state.Validators.GetByIndex(vote.ValidatorIndex)
+			// Synced from upstream CometBFT v0.38.x: guard against an
+			// out-of-bounds ValidatorIndex before dereferencing the validator.
+			if val == nil {
+				valsCount := cs.state.Validators.Size()
+				cs.Logger.Info("Peer sent us vote with invalid ValidatorIndex",
+					"peer", peerID,
+					"validator_index", vote.ValidatorIndex,
+					"len_validators", valsCount)
+				return added, ErrInvalidVote{Reason: fmt.Sprintf("ValidatorIndex %d is out of bounds [0, %d)", vote.ValidatorIndex, valsCount)}
+			}
 			if err := vote.VerifyExtension(cs.state.ChainID, val.PubKey); err != nil {
 				return false, err
 			}
