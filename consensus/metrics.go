@@ -93,11 +93,26 @@ type Metrics struct {
 	//metrics:Interval in seconds between the proposal timestamp and the timestamp of the earliest prevote that achieved a quorum.
 	QuorumPrevoteDelay metrics.Gauge `metrics_labels:"proposer_address"`
 
+	// QuorumPrecommitDelay is the interval in seconds between the proposal
+	// timestamp and the timestamp of the earliest precommit that achieved a
+	// quorum during the precommit step.
+	// Synced from upstream CometBFT v0.38.x.
+	//metrics:Interval in seconds between the proposal timestamp and the timestamp of the earliest precommit that achieved a quorum.
+	QuorumPrecommitDelay metrics.Gauge `metrics_labels:"proposer_address"`
+
 	// FullPrevoteDelay is the interval in seconds between the proposal
 	// timestamp and the timestamp of the latest prevote in a round where 100%
 	// of the voting power on the network issued prevotes.
 	//metrics:Interval in seconds between the proposal timestamp and the timestamp of the latest prevote in a round where all validators voted.
 	FullPrevoteDelay metrics.Gauge `metrics_labels:"proposer_address"`
+
+	// PrecommitsCounted is the number of precommit votes counted after the timeout commit period has ended.
+	// Synced from upstream CometBFT v0.38.x.
+	PrecommitsCounted metrics.Gauge
+
+	// PrecommitsStakingPercentage is the voting power percentage of precommit votes once the timeout commit period has ended.
+	// Synced from upstream CometBFT v0.38.x.
+	PrecommitsStakingPercentage metrics.Gauge
 
 	// VoteExtensionReceiveCount is the number of vote extensions received by this
 	// node. The metric is annotated by the status of the vote extension from the

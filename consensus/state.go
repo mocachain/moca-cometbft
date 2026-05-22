@@ -1007,6 +1007,7 @@ func (cs *State) handleTimeout(ti timeoutInfo, rs cstypes.RoundState) {
 			cs.Logger.Error("failed publishing timeout wait", "err", err)
 		}
 
+		cs.emitPrecommitTimeoutMetrics(ti.Round)
 		cs.enterPrecommit(ti.Height, ti.Round)
 		cs.enterNewRound(ti.Height, ti.Round+1)
 
@@ -1720,6 +1721,8 @@ func (cs *State) finalizeCommit(height int64) {
 	if err := cs.blockExec.ValidateBlock(cs.state, block, cs.skipAppHashVerify); err != nil {
 		panic(fmt.Errorf("+2/3 committed an invalid block: %w", err))
 	}
+
+	cs.calculatePrecommitMessageDelayMetrics()
 
 	logger.Info(
 		"finalizing commit of block",
@@ -2545,6 +2548,63 @@ func (cs *State) calculatePrevoteMessageDelayMetrics() {
 	}
 	if ps.HasAll() {
 		cs.metrics.FullPrevoteDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(pl[len(pl)-1].Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
+	}
+}
+
+// emitPrecommitTimeoutMetrics calculates and emits metrics for the precommit
+// votes collected during the TimeoutCommit period.
+// Synced from upstream CometBFT v0.38.x.
+func (cs *State) emitPrecommitTimeoutMetrics(round int32) {
+	totalVotesCollected := 0
+	totalVotingPowerCollected := int64(0)
+
+	for _, vote := range cs.Votes.Precommits(round).List() {
+		totalVotesCollected++
+		_, val := cs.Validators.GetByAddress(vote.ValidatorAddress)
+		if val != nil {
+			totalVotingPowerCollected += val.VotingPower
+		}
+	}
+
+	totalPossibleVotingPower := cs.Validators.TotalVotingPower()
+	var stakePercentage float64
+	if totalPossibleVotingPower > 0 {
+		stakePercentage = float64(totalVotingPowerCollected) / float64(totalPossibleVotingPower)
+	}
+
+	cs.metrics.PrecommitsCounted.Set(float64(totalVotesCollected))
+	cs.metrics.PrecommitsStakingPercentage.Set(stakePercentage)
+
+	cs.Logger.Debug("emitted post-quorum precommit metrics",
+		"votes_collected", totalVotesCollected,
+		"stake_percentage", stakePercentage)
+}
+
+// calculatePrecommitMessageDelayMetrics emits the QuorumPrecommitDelay metric.
+// Synced from upstream CometBFT v0.38.x.
+func (cs *State) calculatePrecommitMessageDelayMetrics() {
+	if cs.Proposal == nil {
+		return
+	}
+
+	ps := cs.Votes.Precommits(cs.Round)
+	pl := ps.List()
+
+	sort.Slice(pl, func(i, j int) bool {
+		return pl[i].Timestamp.Before(pl[j].Timestamp)
+	})
+
+	var votingPowerSeen int64
+	for _, v := range pl {
+		_, val := cs.Validators.GetByAddress(v.ValidatorAddress)
+		if val == nil {
+			continue
+		}
+		votingPowerSeen += val.VotingPower
+		if votingPowerSeen >= cs.Validators.TotalVotingPower()*2/3+1 {
+			cs.metrics.QuorumPrecommitDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
+			break
+		}
 	}
 }
 
