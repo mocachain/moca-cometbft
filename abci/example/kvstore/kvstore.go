@@ -506,10 +506,6 @@ func (app *Application) getValidators() (validators []types.ValidatorUpdate) {
 	return
 }
 
-func (app *Application) EthQuery(_ context.Context, query *types.RequestEthQuery) (*types.ResponseEthQuery, error) {
-	panic("should not happen")
-}
-
 // -----------------------------
 
 type State struct {

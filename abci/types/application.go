@@ -32,9 +32,6 @@ type Application interface {
 	OfferSnapshot(context.Context, *RequestOfferSnapshot) (*ResponseOfferSnapshot, error)                // Offer a snapshot to the application
 	LoadSnapshotChunk(context.Context, *RequestLoadSnapshotChunk) (*ResponseLoadSnapshotChunk, error)    // Load a snapshot chunk
 	ApplySnapshotChunk(context.Context, *RequestApplySnapshotChunk) (*ResponseApplySnapshotChunk, error) // Apply a shapshot chunk
-
-	// Serve EVM json-rpc request
-	EthQuery(context.Context, *RequestEthQuery) (*ResponseEthQuery, error)
 }
 
 //-------------------------------------------------------
@@ -99,10 +96,6 @@ func (BaseApplication) PrepareProposal(_ context.Context, req *RequestPreparePro
 
 func (BaseApplication) ProcessProposal(context.Context, *RequestProcessProposal) (*ResponseProcessProposal, error) {
 	return &ResponseProcessProposal{Status: ResponseProcessProposal_ACCEPT}, nil
-}
-
-func (BaseApplication) EthQuery(context.Context, *RequestEthQuery) (*ResponseEthQuery, error) {
-	return &ResponseEthQuery{Code: CodeTypeOK}, nil
 }
 
 func (BaseApplication) ExtendVote(context.Context, *RequestExtendVote) (*ResponseExtendVote, error) {

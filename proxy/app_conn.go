@@ -10,7 +10,7 @@ import (
 	"github.com/cometbft/cometbft/abci/types"
 )
 
-//go:generate ../scripts/mockery_generate.sh AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot|AppConnEthQuery
+//go:generate ../scripts/mockery_generate.sh AppConnConsensus|AppConnMempool|AppConnQuery|AppConnSnapshot
 
 //----------------------------------------------------------------------------------------
 // Enforce which abci msgs can be sent on a connection at the type level
@@ -50,12 +50,6 @@ type AppConnSnapshot interface {
 	OfferSnapshot(context.Context, *types.RequestOfferSnapshot) (*types.ResponseOfferSnapshot, error)
 	LoadSnapshotChunk(context.Context, *types.RequestLoadSnapshotChunk) (*types.ResponseLoadSnapshotChunk, error)
 	ApplySnapshotChunk(context.Context, *types.RequestApplySnapshotChunk) (*types.ResponseApplySnapshotChunk, error)
-}
-
-type AppConnEthQuery interface {
-	Error() error
-
-	EthQuerySync(ctx context.Context, query *types.RequestEthQuery) (*types.ResponseEthQuery, error)
 }
 
 //-----------------------------------------------------------------------------------------
@@ -233,25 +227,4 @@ func (app *appConnSnapshot) ApplySnapshotChunk(ctx context.Context, req *types.R
 func addTimeSample(m metrics.Histogram) func() {
 	start := time.Now()
 	return func() { m.Observe(time.Since(start).Seconds()) }
-}
-
-// -----------------------------------------------------------------------------------------
-// Implements AppConnEthQuery (subset of abcicli.Client)
-
-type appConnEthQuery struct {
-	appConn abcicli.Client
-}
-
-func NewAppConnEthQuery(appConn abcicli.Client) AppConnEthQuery {
-	return &appConnEthQuery{
-		appConn: appConn,
-	}
-}
-
-func (app *appConnEthQuery) Error() error {
-	return app.appConn.Error()
-}
-
-func (app *appConnEthQuery) EthQuerySync(ctx context.Context, query *types.RequestEthQuery) (*types.ResponseEthQuery, error) {
-	return app.appConn.EthQuerySync(ctx, query)
 }

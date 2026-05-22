@@ -513,23 +513,3 @@ func (cli *socketClient) stopForError(err error) {
 		cli.Logger.Error("Error stopping abci.socketClient", "err", err)
 	}
 }
-
-func (cli *socketClient) EthQueryAsync(ctx context.Context, req *types.RequestEthQuery) (*ReqRes, error) {
-	return cli.queueRequest(ctx, types.ToRequestEthQuery(req))
-}
-
-func (cli *socketClient) EthQuerySync(ctx context.Context, req *types.RequestEthQuery) (*types.ResponseEthQuery, error) {
-	reqres, err := cli.queueRequest(ctx, types.ToRequestEthQuery(req))
-	if err != nil {
-		return nil, err
-	}
-	if err := cli.Flush(ctx); err != nil {
-		return nil, err
-	}
-
-	return reqres.Response.GetEthQuery(), cli.Error()
-}
-
-func (cli *socketClient) EthQuery(ctx context.Context, req *types.RequestEthQuery) (*types.ResponseEthQuery, error) {
-	panic("should not happen")
-}
