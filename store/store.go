@@ -408,10 +408,13 @@ func (bs *BlockStore) PruneBlocks(height int64, state sm.State) (uint64, int64, 
 		}
 		// Synced from upstream CometBFT v0.38.x: prune the extended commit
 		// alongside the other commit data so it does not accumulate forever.
+		// The in-memory cache must be evicted too, otherwise reads can return
+		// a stale extended commit after the DB record is gone.
 		if h < evidencePoint {
 			if err := batch.Delete(calcExtCommitKey(h)); err != nil {
 				return 0, -1, err
 			}
+			bs.blockExtendedCommitCache.Remove(h)
 		}
 		for p := 0; p < int(meta.BlockID.PartSetHeader.Total); p++ {
 			if err := batch.Delete(calcBlockPartKey(h, p)); err != nil {
