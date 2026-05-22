@@ -856,6 +856,10 @@ func (cfg *MempoolConfig) ValidateBasic() error {
 //-----------------------------------------------------------------------------
 // StateSyncConfig
 
+// DefaultMaxSnapshotChunks is the default maximum number of chunks allowed in a
+// state-sync snapshot. Synced from upstream CometBFT v0.38.x.
+const DefaultMaxSnapshotChunks uint32 = 100000
+
 // StateSyncConfig defines the configuration for the CometBFT state sync service
 type StateSyncConfig struct {
 	Enable              bool          `mapstructure:"enable"`
@@ -888,7 +892,7 @@ func DefaultStateSyncConfig() *StateSyncConfig {
 		DiscoveryTime:       15 * time.Second,
 		ChunkRequestTimeout: 10 * time.Second,
 		ChunkFetchers:       4,
-		MaxSnapshotChunks:   100000,
+		MaxSnapshotChunks:   DefaultMaxSnapshotChunks,
 	}
 }
 
@@ -899,6 +903,13 @@ func TestStateSyncConfig() *StateSyncConfig {
 
 // ValidateBasic performs basic validation.
 func (cfg *StateSyncConfig) ValidateBasic() error {
+	// Synced from upstream CometBFT v0.38.x. Default rather than error when the
+	// key is absent, so nodes upgrading with an existing config.toml (which has
+	// no max_snapshot_chunks entry) still start.
+	if cfg.MaxSnapshotChunks == 0 {
+		cfg.MaxSnapshotChunks = DefaultMaxSnapshotChunks
+	}
+
 	if cfg.Enable {
 		if len(cfg.RPCServers) == 0 {
 			return errors.New("rpc_servers is required")
@@ -941,10 +952,6 @@ func (cfg *StateSyncConfig) ValidateBasic() error {
 
 		if cfg.ChunkFetchers <= 0 {
 			return errors.New("chunk_fetchers is required")
-		}
-
-		if cfg.MaxSnapshotChunks == 0 {
-			return errors.New("max_snapshot_chunks is required")
 		}
 	}
 
