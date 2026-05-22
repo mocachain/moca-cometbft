@@ -109,8 +109,13 @@ func (r *Reactor) Receive(e p2p.Envelope) {
 		return
 	}
 
-	err := validateMsg(e.Message)
+	err := validateMsg(e.Message, r.cfg.MaxSnapshotChunks)
 	if err != nil {
+		// Synced from upstream CometBFT v0.38.x: reject peers that advertise
+		// snapshots with more chunks than allowed.
+		if errors.Is(err, ErrExceedsMaxSnapshotChunks) {
+			r.syncer.RejectPeer(e.Src)
+		}
 		r.Logger.Error("Invalid message", "peer", e.Src, "msg", e.Message, "err", err)
 		r.Switch.StopPeerForError(e.Src, err)
 		return

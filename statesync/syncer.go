@@ -139,6 +139,13 @@ func (s *syncer) RemovePeer(peer p2p.Peer) {
 	s.snapshots.RemovePeer(peer.ID())
 }
 
+// RejectPeer rejects a peer from the pool. It will never be used again.
+// Synced from upstream CometBFT v0.38.x.
+func (s *syncer) RejectPeer(peer p2p.Peer) {
+	s.logger.Debug("Rejecting peer from sync", "peer", peer.ID())
+	s.snapshots.RejectPeer(peer.ID())
+}
+
 // SyncAny tries to sync any of the snapshots in the snapshot pool, waiting to discover further
 // snapshots if none were found and discoveryTime > 0.
 // It returns the latest state and block commit or specific state at height if targetHeight > 0
