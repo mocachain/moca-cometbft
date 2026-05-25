@@ -502,8 +502,19 @@ FOR_LOOP:
 			// first.Hash() doesn't verify the tx contents, so MakePartSet() is
 			// currently necessary.
 			// TODO(sergio): Should we also validate against the extended commit?
-			err = state.Validators.VerifyCommitLight(
-				chainID, firstID, first.Height, second.LastCommit)
+			//
+			// Synced from upstream CometBFT v0.38.x (#5753): a malformed peer can
+			// deliver a `second` block whose LastCommit is nil; verifying or
+			// saving it later would nil-deref. Treat that as a validation error.
+			// Use VerifyCommit (full) instead of VerifyCommitLight so every
+			// signature in second.LastCommit is verified before it is persisted
+			// as the canonical commit for `first`.
+			if second.LastCommit == nil {
+				err = fmt.Errorf("second block at height %d has nil LastCommit", second.Height)
+			} else {
+				err = state.Validators.VerifyCommit(
+					chainID, firstID, first.Height, second.LastCommit)
+			}
 
 			if err == nil {
 				// validate the block before we persist it

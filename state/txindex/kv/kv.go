@@ -363,7 +363,13 @@ func lookForHash(conditions []syntax.Condition) (hash []byte, ok bool, err error
 
 func (*TxIndex) setTmpHashes(tmpHeights map[string][]byte, key, value []byte) {
 	eventSeq := extractEventSeqFromKey(key)
-	tmpHeights[string(value)+eventSeq] = value
+
+	// Synced from upstream CometBFT v0.38.x: copy the value because the
+	// iterator reuses its buffer, which otherwise drops tx_search results.
+	valueCopy := make([]byte, len(value))
+	copy(valueCopy, value)
+
+	tmpHeights[string(valueCopy)+eventSeq] = valueCopy
 }
 
 // match returns all matching txs by hash that meet a given condition and start

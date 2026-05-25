@@ -856,6 +856,10 @@ func (cfg *MempoolConfig) ValidateBasic() error {
 //-----------------------------------------------------------------------------
 // StateSyncConfig
 
+// DefaultMaxSnapshotChunks is the default maximum number of chunks allowed in a
+// state-sync snapshot. Synced from upstream CometBFT v0.38.x.
+const DefaultMaxSnapshotChunks uint32 = 100000
+
 // StateSyncConfig defines the configuration for the CometBFT state sync service
 type StateSyncConfig struct {
 	Enable              bool          `mapstructure:"enable"`
@@ -867,7 +871,9 @@ type StateSyncConfig struct {
 	DiscoveryTime       time.Duration `mapstructure:"discovery_time"`
 	ChunkRequestTimeout time.Duration `mapstructure:"chunk_request_timeout"`
 	ChunkFetchers       int32         `mapstructure:"chunk_fetchers"`
-	TargetHeight        int64         `mapstructure:"target_height"`
+	// MaxSnapshotChunks is synced from upstream CometBFT v0.38.x.
+	MaxSnapshotChunks uint32 `mapstructure:"max_snapshot_chunks"`
+	TargetHeight      int64  `mapstructure:"target_height"`
 }
 
 func (cfg *StateSyncConfig) TrustHashBytes() []byte {
@@ -886,6 +892,7 @@ func DefaultStateSyncConfig() *StateSyncConfig {
 		DiscoveryTime:       15 * time.Second,
 		ChunkRequestTimeout: 10 * time.Second,
 		ChunkFetchers:       4,
+		MaxSnapshotChunks:   DefaultMaxSnapshotChunks,
 	}
 }
 
@@ -896,6 +903,13 @@ func TestStateSyncConfig() *StateSyncConfig {
 
 // ValidateBasic performs basic validation.
 func (cfg *StateSyncConfig) ValidateBasic() error {
+	// Synced from upstream CometBFT v0.38.x. Default rather than error when the
+	// key is absent, so nodes upgrading with an existing config.toml (which has
+	// no max_snapshot_chunks entry) still start.
+	if cfg.MaxSnapshotChunks == 0 {
+		cfg.MaxSnapshotChunks = DefaultMaxSnapshotChunks
+	}
+
 	if cfg.Enable {
 		if len(cfg.RPCServers) == 0 {
 			return errors.New("rpc_servers is required")
