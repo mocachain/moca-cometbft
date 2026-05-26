@@ -467,6 +467,15 @@ func (pool *BlockPool) updateMaxPeerHeight() {
 	pool.maxPeerHeight = max
 }
 
+// IsPeerBanned reports whether the peer is currently banned. It acquires
+// pool.mtx and is the safe entry point for callers that do not already hold it
+// (e.g. tests, external callers). Ported from upstream CometBFT v0.38.x.
+func (pool *BlockPool) IsPeerBanned(peerID p2p.ID) bool {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	return pool.isPeerBanned(peerID)
+}
+
 func (pool *BlockPool) isPeerBanned(peerID p2p.ID) bool {
 	// Todo: replace with cmttime.Since in future versions
 	return time.Since(pool.bannedPeers[peerID]) < time.Second*60
