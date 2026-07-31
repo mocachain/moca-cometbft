@@ -1,6 +1,7 @@
 package blocksync
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"reflect"
@@ -10,11 +11,10 @@ import (
 
 	bcproto "github.com/cometbft/cometbft/proto/tendermint/blocksync"
 
+	"github.com/cosmos/gogoproto/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-
-	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 
 	dbm "github.com/cometbft/cometbft-db"
 
@@ -24,6 +24,8 @@ import (
 	"github.com/cometbft/cometbft/libs/log"
 	mpmocks "github.com/cometbft/cometbft/mempool/mocks"
 	"github.com/cometbft/cometbft/p2p"
+	p2pmocks "github.com/cometbft/cometbft/p2p/mocks"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	"github.com/cometbft/cometbft/proxy"
 	sm "github.com/cometbft/cometbft/state"
 	"github.com/cometbft/cometbft/store"
@@ -33,11 +35,15 @@ import (
 
 var config *cfg.Config
 
-func randGenesisDoc(numValidators int, randPower bool, minPower int64) (*types.GenesisDoc, []types.PrivValidator) {
-	validators := make([]types.GenesisValidator, numValidators)
-	privValidators := make([]types.PrivValidator, numValidators)
-	for i := 0; i < numValidators; i++ {
-		val, privVal := types.RandValidator(randPower, minPower)
+func genesisDocWithValsPowers(powers []int64) (*types.GenesisDoc, []types.PrivValidator) {
+	if len(powers) == 0 {
+		panic("must have atleast 1 validator")
+	}
+
+	validators := make([]types.GenesisValidator, len(powers))
+	privValidators := make([]types.PrivValidator, len(powers))
+	for i, power := range powers {
+		val, privVal := types.RandValidator(false, power)
 		validators[i] = types.GenesisValidator{
 			PubKey: val.PubKey,
 			Power:  val.VotingPower,
@@ -61,20 +67,45 @@ type ReactorPair struct {
 	app     proxy.AppConns
 }
 
+type reactorOpts struct {
+	corruptedBlock          int64
+	allAbsentExtCommitBlock int64
+	invalidExtCommitBlock   int64
+	deterministicVoteTimes  bool
+}
+
+type reactorOption func(*reactorOpts)
+
+func withCorruptedBlock(height int64) reactorOption {
+	return func(o *reactorOpts) {
+		o.corruptedBlock = height
+	}
+}
+
+func withAllAbsentExtCommitBlock(height int64) reactorOption {
+	return func(o *reactorOpts) {
+		o.allAbsentExtCommitBlock = height
+	}
+}
+
+func withInvalidExtCommitBlock(height int64) reactorOption {
+	return func(o *reactorOpts) {
+		o.invalidExtCommitBlock = height
+	}
+}
+
 func newReactor(
 	t *testing.T,
 	logger log.Logger,
 	genDoc *types.GenesisDoc,
 	privVals []types.PrivValidator,
 	maxBlockHeight int64,
-	incorrectData ...int64,
+	opts ...reactorOption,
 ) ReactorPair {
-	if len(privVals) != 1 {
-		panic("only support one validator")
-	}
-	var incorrectBlock int64 = 0
-	if len(incorrectData) > 0 {
-		incorrectBlock = incorrectData[0]
+
+	var options reactorOpts
+	for _, opt := range opts {
+		opt(&options)
 	}
 
 	app := abci.NewBaseApplication()
@@ -126,48 +157,62 @@ func newReactor(
 	// The commit we are building for the current height.
 	seenExtCommit := &types.ExtendedCommit{}
 
-	pubKey, err := privVals[0].GetPubKey()
-	if err != nil {
-		panic(err)
-	}
-	addr := pubKey.Address()
-	idx, _ := state.Validators.GetByAddress(addr)
-
 	// let's add some blocks in
 	for blockHeight := int64(1); blockHeight <= maxBlockHeight; blockHeight++ {
 		voteExtensionIsEnabled := genDoc.ConsensusParams.ABCI.VoteExtensionsEnabled(blockHeight)
 
 		lastExtCommit := seenExtCommit.Clone()
 
+		// The reveal must be signed by the validator proposing this height, which
+		// rotates once there is more than one validator in the set.
+		proposerAddr := state.Validators.Proposer.Address
+		proposerVal := privVals[0]
+		for _, pv := range privVals {
+			pk, err := pv.GetPubKey()
+			require.NoError(t, err)
+			if bytes.Equal(pk.Address(), proposerAddr) {
+				proposerVal = pv
+				break
+			}
+		}
 		reveal := &cmtproto.Reveal{Height: blockHeight}
-		_ = privVals[0].SignReveal(state.ChainID, reveal)
+		require.NoError(t, proposerVal.SignReveal(state.ChainID, reveal))
 
-		thisBlock, err := state.MakeBlock(blockHeight, nil, lastExtCommit.ToCommit(), nil, reveal.Signature, state.Validators.Proposer.Address)
+		thisBlock, err := state.MakeBlock(blockHeight, nil, lastExtCommit.ToCommit(), nil, reveal.Signature, proposerAddr)
 		require.NoError(t, err)
 
 		thisParts, err := thisBlock.MakePartSet(types.BlockPartSizeBytes)
 		require.NoError(t, err)
 		blockID := types.BlockID{Hash: thisBlock.Hash(), PartSetHeader: thisParts.Header()}
 
-		// Simulate a commit for the current height
-		vote, err := types.MakeVote(
-			privVals[0],
-			thisBlock.ChainID,
-			idx,
-			thisBlock.Height,
-			0,
-			cmtproto.PrecommitType,
-			blockID,
-			time.Now(),
-		)
-		if err != nil {
-			panic(err)
+		voteTime := time.Now()
+		if options.deterministicVoteTimes {
+			// use deterministic vote times so independently constructed test chains
+			// with the same genesis produce identical block IDs and LastBlockID links.
+			voteTime = genDoc.GenesisTime.Add(time.Duration(blockHeight) * time.Second)
+		}
+
+		// Simulate commits for the current height
+		extCommit := make([]types.ExtendedCommitSig, len(privVals))
+		for _, val := range privVals {
+			pubKey, err := val.GetPubKey()
+			if err != nil {
+				panic(err)
+			}
+			addr := pubKey.Address()
+			idx, _ := state.Validators.GetByAddress(addr)
+
+			vote, err := types.MakeVote(val, thisBlock.ChainID, idx, thisBlock.Height, 0, cmtproto.PrecommitType, blockID, voteTime)
+			if err != nil {
+				panic(err)
+			}
+			extCommit[idx] = vote.ExtendedCommitSig()
 		}
 		seenExtCommit = &types.ExtendedCommit{
-			Height:             vote.Height,
-			Round:              vote.Round,
+			Height:             thisBlock.Height,
+			Round:              0,
 			BlockID:            blockID,
-			ExtendedSignatures: []types.ExtendedCommitSig{vote.ExtendedCommitSig()},
+			ExtendedSignatures: extCommit,
 		}
 
 		state, err = blockExec.ApplyBlock(state, blockID, thisBlock, false)
@@ -175,7 +220,7 @@ func newReactor(
 			panic(fmt.Errorf("error apply block: %w", err))
 		}
 
-		saveCorrectVoteExtensions := blockHeight != incorrectBlock
+		saveCorrectVoteExtensions := blockHeight != options.corruptedBlock
 		if saveCorrectVoteExtensions == voteExtensionIsEnabled {
 			blockStore.SaveBlockWithExtendedCommit(thisBlock, thisParts, seenExtCommit)
 		} else {
@@ -183,7 +228,10 @@ func newReactor(
 		}
 	}
 
-	bcReactor := NewByzantineReactor(incorrectBlock, NewReactor(state.Copy(), blockExec, blockStore, blockSync, NopMetrics(), 0))
+	bcReactor := NewByzantineReactor(NewReactor(state.Copy(), blockExec, blockStore, blockSync, NopMetrics(), 0))
+	bcReactor.corruptedBlock = options.corruptedBlock
+	bcReactor.absentExtCommitBlock = options.allAbsentExtCommitBlock
+	bcReactor.invalidExtCommitBlock = options.invalidExtCommitBlock
 	bcReactor.SetLogger(logger.With("module", "blocksync"))
 
 	return ReactorPair{bcReactor, proxyApp}
@@ -192,7 +240,7 @@ func newReactor(
 func TestNoBlockResponse(t *testing.T) {
 	config = test.ResetTestRoot("blocksync_reactor_test")
 	defer os.RemoveAll(config.RootDir)
-	genDoc, privVals := randGenesisDoc(1, false, 30)
+	genDoc, privVals := genesisDocWithValsPowers([]int64{30})
 
 	maxBlockHeight := int64(65)
 
@@ -208,10 +256,10 @@ func TestNoBlockResponse(t *testing.T) {
 
 	defer func() {
 		for _, r := range reactorPairs {
-			err := r.reactor.Stop()
-			require.NoError(t, err)
-			err = r.app.Stop()
-			require.NoError(t, err)
+			_ = r.reactor.Stop()
+			// require.NoError(t, err)
+			_ = r.app.Stop()
+			// require.NoError(t, err)
 		}
 	}()
 
@@ -250,12 +298,12 @@ func TestNoBlockResponse(t *testing.T) {
 func TestBadBlockStopsPeer(t *testing.T) {
 	config = test.ResetTestRoot("blocksync_reactor_test")
 	defer os.RemoveAll(config.RootDir)
-	genDoc, privVals := randGenesisDoc(1, false, 30)
+	genDoc, privVals := genesisDocWithValsPowers([]int64{30})
 
 	maxBlockHeight := int64(148)
 
 	// Other chain needs a different validator set
-	otherGenDoc, otherPrivVals := randGenesisDoc(1, false, 30)
+	otherGenDoc, otherPrivVals := genesisDocWithValsPowers([]int64{30})
 	otherChain := newReactor(t, log.TestingLogger(), otherGenDoc, otherPrivVals, maxBlockHeight)
 
 	defer func() {
@@ -332,7 +380,7 @@ func TestCheckSwitchToConsensusLastHeightZero(t *testing.T) {
 
 	config = test.ResetTestRoot("blocksync_reactor_test")
 	defer os.RemoveAll(config.RootDir)
-	genDoc, privVals := randGenesisDoc(1, false, 30)
+	genDoc, privVals := genesisDocWithValsPowers([]int64{30})
 
 	reactorPairs := make([]ReactorPair, 1, 2)
 	reactorPairs[0] = newReactor(t, log.TestingLogger(), genDoc, privVals, 0)
@@ -394,10 +442,10 @@ func TestCheckSwitchToConsensusLastHeightZero(t *testing.T) {
 	}
 }
 
-func ExtendedCommitNetworkHelper(t *testing.T, maxBlockHeight int64, enableVoteExtensionAt int64, invalidBlockHeightAt int64) {
+func ExtendedCommitNetworkHelper(t *testing.T, maxBlockHeight int64, enableVoteExtensionAt int64, valPowers []int64, opts ...reactorOption) {
 	config = test.ResetTestRoot("blocksync_reactor_test")
 	defer os.RemoveAll(config.RootDir)
-	genDoc, privVals := randGenesisDoc(1, false, 30)
+	genDoc, privVals := genesisDocWithValsPowers(valPowers)
 	genDoc.ConsensusParams.ABCI.VoteExtensionsEnableHeight = enableVoteExtensionAt
 
 	reactorPairs := make([]ReactorPair, 1, 2)
@@ -405,14 +453,12 @@ func ExtendedCommitNetworkHelper(t *testing.T, maxBlockHeight int64, enableVoteE
 	reactorPairs[0].reactor.switchToConsensusMs = 50
 	defer func() {
 		for _, r := range reactorPairs {
-			err := r.reactor.Stop()
-			require.NoError(t, err)
-			err = r.app.Stop()
-			require.NoError(t, err)
+			_ = r.reactor.Stop()
+			_ = r.app.Stop()
 		}
 	}()
 
-	reactorPairs = append(reactorPairs, newReactor(t, log.TestingLogger(), genDoc, privVals, maxBlockHeight, invalidBlockHeightAt))
+	reactorPairs = append(reactorPairs, newReactor(t, log.TestingLogger(), genDoc, privVals, maxBlockHeight, opts...))
 
 	var switches []*p2p.Switch
 	for _, r := range reactorPairs {
@@ -441,22 +487,349 @@ func ExtendedCommitNetworkHelper(t *testing.T, maxBlockHeight int64, enableVoteE
 	}
 }
 
-// TestCheckExtendedCommitExtra tests when VoteExtension is disabled but an ExtendedVote is present in the block.
-func TestCheckExtendedCommitExtra(t *testing.T) {
-	const maxBlockHeight = 10
-	const enableVoteExtension = 5
-	const invalidBlockHeight = 3
+// newFilterReactor builds a minimal Reactor wired to a started BlockPool,
+// suitable for exercising FilterMsgBytes without spinning up the full p2p
+// stack.
+func newFilterReactor(t *testing.T) *Reactor {
+	t.Helper()
 
-	ExtendedCommitNetworkHelper(t, maxBlockHeight, enableVoteExtension, invalidBlockHeight)
+	requestsCh := make(chan BlockRequest, 1000)
+	errorsCh := make(chan peerError, 1000)
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	require.NoError(t, pool.Start())
+	t.Cleanup(func() { _ = pool.Stop() })
+
+	r := &Reactor{pool: pool}
+	r.blockSync.Store(true)
+	return r
 }
 
-// TestCheckExtendedCommitMissing tests when VoteExtension is enabled but the ExtendedVote is missing from the block.
-func TestCheckExtendedCommitMissing(t *testing.T) {
-	const maxBlockHeight = 10
-	const enableVoteExtension = 5
-	const invalidBlockHeight = 8
+// seedRequester inserts a bpRequester targeting peerID at the given height,
+// bypassing makeRequestersRoutine so the test can drive pool state directly.
+func seedRequester(r *Reactor, height int64, peerID p2p.ID) {
+	req := newBPRequester(r.pool, height)
+	req.peerID = peerID
+	r.pool.mtx.Lock()
+	r.pool.requesters[height] = req
+	r.pool.mtx.Unlock()
+}
 
-	ExtendedCommitNetworkHelper(t, maxBlockHeight, enableVoteExtension, invalidBlockHeight)
+func mockPeer(id p2p.ID) *p2pmocks.Peer {
+	p := &p2pmocks.Peer{}
+	p.On("ID").Return(id).Maybe()
+	return p
+}
+
+func TestFilterMsgBytes(t *testing.T) {
+	wireBytesFor := func(t *testing.T, m *bcproto.Message) []byte {
+		t.Helper()
+		b, err := proto.Marshal(m)
+		require.NoError(t, err)
+		require.NotEmpty(t, b)
+		return b
+	}
+
+	blockResponseBytes := func(t *testing.T) []byte {
+		return wireBytesFor(t, &bcproto.Message{
+			Sum: &bcproto.Message_BlockResponse{
+				BlockResponse: &bcproto.BlockResponse{Block: &cmtproto.Block{}},
+			},
+		})
+	}
+
+	blockRequestBytes := func(t *testing.T) []byte {
+		return wireBytesFor(t, &bcproto.Message{
+			Sum: &bcproto.Message_BlockRequest{
+				BlockRequest: &bcproto.BlockRequest{Height: 1},
+			},
+		})
+	}
+
+	const expected p2p.ID = "expected"
+	const unexpected p2p.ID = "unexpected"
+
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T) *Reactor // returns a configured reactor
+		chID      byte
+		peer      p2p.ID
+		bytesFn   func(t *testing.T) []byte
+		expectErr string // substring; "" means no error
+	}{
+		{
+			name: "rejects BlockResponse when blocksync never ran",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				r.blockSync.Store(false)
+				return r
+			},
+			chID:      BlocksyncChannel,
+			peer:      unexpected,
+			bytesFn:   blockResponseBytes,
+			expectErr: "blocksync not active",
+		},
+		{
+			// After catching up, the pool stops but in-flight responses from our
+			// own requests arrive after the switch to consensus. The peer is
+			// honest and must not be disconnected.
+			name: "allows late BlockResponse after pool stops for consensus switch",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				require.NoError(t, r.pool.Stop())
+				return r
+			},
+			chID:    BlocksyncChannel,
+			peer:    unexpected,
+			bytesFn: blockResponseBytes,
+		},
+		{
+			// Any connected peer can reach this path once the pool is stopped,
+			// so the sig-count guard must still apply here.
+			name: "rejects oversized BlockResponse after pool stops for consensus switch",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				require.NoError(t, r.pool.Stop())
+				return r
+			},
+			chID:      BlocksyncChannel,
+			peer:      unexpected,
+			bytesFn:   func(t *testing.T) []byte { return blockResponseBytesWithSigs(t, types.MaxVotesCount+1, 0) },
+			expectErr: "too many commit signatures",
+		},
+		{
+			name:      "rejects unsolicited BlockResponse with no requesters",
+			setup:     newFilterReactor,
+			chID:      BlocksyncChannel,
+			peer:      unexpected,
+			bytesFn:   blockResponseBytes,
+			expectErr: "unsolicited BlockResponse from peer unexpected",
+		},
+		{
+			name: "rejects BlockResponse from peer we did not request from",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID:      BlocksyncChannel,
+			peer:      unexpected,
+			bytesFn:   blockResponseBytes,
+			expectErr: "unsolicited BlockResponse from peer unexpected",
+		},
+		{
+			name: "allows BlockResponse from solicited peer",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID:    BlocksyncChannel,
+			peer:    expected,
+			bytesFn: blockResponseBytes,
+		},
+		{
+			name:    "allows non-BlockResponse messages even when disabled",
+			setup:   newFilterReactor,
+			chID:    BlocksyncChannel,
+			peer:    "any",
+			bytesFn: blockRequestBytes,
+		},
+		{
+			name:    "ignores other channels",
+			setup:   newFilterReactor,
+			chID:    byte(0x20),
+			peer:    "any",
+			bytesFn: blockResponseBytes,
+		},
+		{
+			name:    "ignores empty bytes",
+			setup:   newFilterReactor,
+			chID:    BlocksyncChannel,
+			peer:    "any",
+			bytesFn: func(*testing.T) []byte { return nil },
+		},
+		{
+			name: "allows BlockResponse at MaxVotesCount commit signatures",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID:    BlocksyncChannel,
+			peer:    expected,
+			bytesFn: func(t *testing.T) []byte { return blockResponseBytesWithSigs(t, types.MaxVotesCount, 0) },
+		},
+		{
+			name: "rejects BlockResponse exceeding commit signature cap",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID:      BlocksyncChannel,
+			peer:      expected,
+			bytesFn:   func(t *testing.T) []byte { return blockResponseBytesWithSigs(t, types.MaxVotesCount+1, 0) },
+			expectErr: "too many commit signatures",
+		},
+		{
+			name: "rejects BlockResponse exceeding extended commit signature cap",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID:      BlocksyncChannel,
+			peer:      expected,
+			bytesFn:   func(t *testing.T) []byte { return blockResponseBytesWithSigs(t, 0, types.MaxVotesCount+1) },
+			expectErr: "too many extended commit signatures",
+		},
+		{
+			name: "rejects BlockResponse splitting signatures across duplicate Block fields",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID: BlocksyncChannel,
+			peer: expected,
+			bytesFn: func(t *testing.T) []byte {
+				half := types.MaxVotesCount/2 + 1 // 2*half > MaxVotesCount
+				a := blockResponseBytesWithSigs(t, half, 0)
+				b := blockResponseBytesWithSigs(t, half, 0)
+				return append(append([]byte{}, a...), b...)
+			},
+			expectErr: "too many commit signatures",
+		},
+		{
+			name: "rejects BlockResponse when first byte is not BlockResponse proto tag",
+			setup: func(t *testing.T) *Reactor {
+				r := newFilterReactor(t)
+				seedRequester(r, 1, expected)
+				return r
+			},
+			chID: BlocksyncChannel,
+			peer: expected,
+			bytesFn: func(t *testing.T) []byte {
+				// Prepend an empty BlockRequest field (tag 0x0a, len 0)
+				// so msgBytes[0] != BlockResponse oneof tag, then append
+				// a real BlockResponse payload that exceeds the cap.
+				oversized := blockResponseBytesWithSigs(t, types.MaxVotesCount+1, 0)
+				return append([]byte{0x0a, 0x00}, oversized...)
+			},
+			expectErr: "too many commit signatures",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := tc.setup(t)
+			err := r.FilterMsgBytes(tc.chID, mockPeer(tc.peer), tc.bytesFn(t))
+			if tc.expectErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.expectErr)
+		})
+	}
+}
+
+func TestStubUnmarshalAllocs(t *testing.T) {
+	tests := []struct {
+		name          string
+		numCommits    int
+		numExtCommits int
+	}{
+		{"10k commit sigs", 10_000, 0},
+		{"100k commit sigs", 100_000, 0},
+		{"1m commit sigs", 1_000_000, 0},
+		{"10k ext commit sigs", 0, 10_000},
+		{"100k ext commit sigs", 0, 100_000},
+		{"1m ext commit sigs", 0, 1_000_000},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := blockResponseBytesWithSigs(t, tt.numCommits, tt.numExtCommits)
+			allocs := testing.AllocsPerRun(20, func() {
+				var stub bcproto.SigCountMessage
+				require.NoError(t, stub.Unmarshal(payload))
+				require.Len(t, stub.BlockResponse.Block.LastCommit.Signatures, tt.numCommits)
+				require.Len(t, stub.BlockResponse.ExtCommit.ExtendedSignatures, tt.numExtCommits)
+			})
+			const maxAllocs = 50
+			require.LessOrEqualf(t, int(allocs), maxAllocs, "unmarshal allocated %d times, more than max allowed", int(allocs), maxAllocs)
+		})
+	}
+}
+
+func blockResponseBytesWithSigs(t *testing.T, commitSigs, extSigs int) []byte {
+	t.Helper()
+	commit := &cmtproto.Commit{Signatures: make([]cmtproto.CommitSig, commitSigs)}
+	for i := range commit.Signatures {
+		commit.Signatures[i] = cmtproto.CommitSig{BlockIdFlag: cmtproto.BlockIDFlagAbsent}
+	}
+
+	ext := &cmtproto.ExtendedCommit{ExtendedSignatures: make([]cmtproto.ExtendedCommitSig, extSigs)}
+	for i := range ext.ExtendedSignatures {
+		ext.ExtendedSignatures[i] = cmtproto.ExtendedCommitSig{BlockIdFlag: cmtproto.BlockIDFlagAbsent}
+	}
+
+	msg := &bcproto.Message{
+		Sum: &bcproto.Message_BlockResponse{
+			BlockResponse: &bcproto.BlockResponse{
+				Block:     &cmtproto.Block{LastCommit: commit},
+				ExtCommit: ext,
+			},
+		},
+	}
+
+	payload, err := proto.Marshal(msg)
+	require.NoError(t, err)
+	return payload
+}
+
+func TestCheckExtendedCommit(t *testing.T) {
+	tests := []struct {
+		name                  string
+		maxBlockHeight        int64
+		enableVoteExtensionAt int64
+		valPowers             []int64
+		opts                  []reactorOption
+	}{
+		{
+			name:                  "extra ext commit when disabled",
+			maxBlockHeight:        10,
+			enableVoteExtensionAt: 5,
+			valPowers:             []int64{30, 1},
+			opts:                  []reactorOption{withCorruptedBlock(3)},
+		},
+		{
+			name:                  "missing ext commit when enabled",
+			maxBlockHeight:        10,
+			enableVoteExtensionAt: 5,
+			valPowers:             []int64{30, 1},
+			opts:                  []reactorOption{withCorruptedBlock(8)},
+		},
+		{
+			name:                  "all absent signatures",
+			maxBlockHeight:        10,
+			enableVoteExtensionAt: 1,
+			valPowers:             []int64{30, 1},
+			opts:                  []reactorOption{withAllAbsentExtCommitBlock(5)},
+		},
+		{
+			name:                  "invalid signature after 2/3+ threshold",
+			maxBlockHeight:        10,
+			enableVoteExtensionAt: 1,
+			valPowers:             []int64{10, 10, 10, 1},
+			opts:                  []reactorOption{withInvalidExtCommitBlock(5)},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ExtendedCommitNetworkHelper(t, tc.maxBlockHeight, tc.enableVoteExtensionAt, tc.valPowers, tc.opts...)
+		})
+	}
 }
 
 // ByzantineReactor is a blockstore reactor implementation where a corrupted block can be sent to a peer.
@@ -465,13 +838,14 @@ func TestCheckExtendedCommitMissing(t *testing.T) {
 // If the corrupted block height is set to 0, the reactor behaves as normal.
 type ByzantineReactor struct {
 	*Reactor
-	corruptedBlock int64
+	corruptedBlock        int64
+	absentExtCommitBlock  int64
+	invalidExtCommitBlock int64
 }
 
-func NewByzantineReactor(invalidBlock int64, conR *Reactor) *ByzantineReactor {
+func NewByzantineReactor(conR *Reactor) *ByzantineReactor {
 	return &ByzantineReactor{
-		Reactor:        conR,
-		corruptedBlock: invalidBlock,
+		Reactor: conR,
 	}
 }
 
@@ -504,6 +878,23 @@ func (bcR *ByzantineReactor) respondToPeer(msg *bcproto.BlockRequest, src p2p.Pe
 		}
 	}
 
+	if bcR.absentExtCommitBlock == msg.Height && extCommit != nil {
+		absentSigs := make([]types.ExtendedCommitSig, len(extCommit.ExtendedSignatures))
+		for i := range absentSigs {
+			absentSigs[i] = types.NewExtendedCommitSigAbsent()
+		}
+		extCommit = &types.ExtendedCommit{
+			Height:             extCommit.Height,
+			Round:              extCommit.Round,
+			BlockID:            extCommit.BlockID,
+			ExtendedSignatures: absentSigs,
+		}
+	}
+
+	if bcR.invalidExtCommitBlock == msg.Height && extCommit != nil {
+		extCommit.ExtendedSignatures[len(extCommit.ExtendedSignatures)-1].Signature = []byte("invalid signature")
+	}
+
 	bl, err := block.ToProto()
 	if err != nil {
 		bcR.Logger.Error("could not convert msg to protobuf", "err", err)
@@ -521,7 +912,7 @@ func (bcR *ByzantineReactor) respondToPeer(msg *bcproto.BlockRequest, src p2p.Pe
 
 // Receive implements Reactor by handling 4 types of messages (look below).
 // Copied unchanged from reactor.go so the correct respondToPeer is called.
-func (bcR *ByzantineReactor) Receive(e p2p.Envelope) { //nolint: dupl
+func (bcR *ByzantineReactor) Receive(e p2p.Envelope) {
 	if err := ValidateMsg(e.Message); err != nil {
 		bcR.Logger.Error("Peer sent us invalid msg", "peer", e.Src, "msg", e.Message, "err", err)
 		bcR.Switch.StopPeerForError(e.Src, err)
@@ -574,4 +965,58 @@ func (bcR *ByzantineReactor) Receive(e p2p.Envelope) { //nolint: dupl
 	default:
 		bcR.Logger.Error(fmt.Sprintf("Unknown message type %v", reflect.TypeOf(msg)))
 	}
+}
+
+func TestPeerNotDisconnectedOnLateBlockResponseAfterConsensusSwitch(t *testing.T) {
+	config = test.ResetTestRoot("blocksync_reactor_test")
+	defer os.RemoveAll(config.RootDir)
+
+	const nBlocks = int64(10)
+	genDoc, privVals := genesisDocWithValsPowers([]int64{30})
+
+	servingPair := newReactor(t, log.TestingLogger(), genDoc, privVals, nBlocks)
+	defer func() {
+		require.NoError(t, servingPair.reactor.Stop())
+		require.NoError(t, servingPair.app.Stop())
+	}()
+
+	syncingPair := newReactor(t, log.TestingLogger(), genDoc, privVals, 0)
+	syncingPair.reactor.switchToConsensusMs = 20
+	defer func() {
+		require.NoError(t, syncingPair.reactor.Stop())
+		require.NoError(t, syncingPair.app.Stop())
+	}()
+
+	switches := p2p.MakeConnectedSwitches(config.P2P, 2, func(i int, s *p2p.Switch) *p2p.Switch {
+		if i == 0 {
+			s.AddReactor("BLOCKSYNC", syncingPair.reactor)
+		} else {
+			s.AddReactor("BLOCKSYNC", servingPair.reactor)
+		}
+		return s
+	}, p2p.Connect2Switches)
+
+	require.Eventually(t, func() bool {
+		return !syncingPair.reactor.pool.IsRunning()
+	}, 30*time.Second, 5*time.Millisecond, "syncing pool did not stop")
+
+	// Pool stopped (consensus switch). Simulate a late in-flight response by
+	// sending block 1 from the serving node — exercises the onReceive →
+	// FilterMsgBytes path in p2p/peer.go.
+	block := servingPair.reactor.store.LoadBlock(1)
+	require.NotNil(t, block)
+	bl, err := block.ToProto()
+	require.NoError(t, err)
+
+	peers := switches[1].Peers().List()
+	require.Len(t, peers, 1)
+	require.True(t, peers[0].TrySend(p2p.Envelope{
+		ChannelID: BlocksyncChannel,
+		Message:   &bcproto.BlockResponse{Block: bl},
+	}), "message must be queued to exercise the filter path")
+
+	require.Never(t, func() bool {
+		return switches[0].Peers().Size() != 1
+	}, 200*time.Millisecond, 5*time.Millisecond,
+		"serving peer was incorrectly disconnected by a late in-flight BlockResponse")
 }

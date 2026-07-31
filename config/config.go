@@ -168,7 +168,7 @@ func (cfg *Config) CheckDeprecated() []string {
 // BaseConfig
 
 // BaseConfig defines the base configuration for a CometBFT node
-type BaseConfig struct { //nolint: maligned
+type BaseConfig struct {
 
 	// The version of the CometBFT binary that created
 	// or last modified the config file
@@ -240,25 +240,30 @@ type BaseConfig struct { //nolint: maligned
 
 	// If true, app hash will not be checked
 	SkipAppHash bool `mapstructure:"skip_app_hash"`
+
+	// The capacity of the internal buffer used by the EventBus. A value of 0
+	// means unbuffered (publishers block until subscribers receive).
+	EventBusBufferCapacity int `mapstructure:"event_bus_buffer_capacity"`
 }
 
 // DefaultBaseConfig returns a default base configuration for a CometBFT node
 func DefaultBaseConfig() BaseConfig {
 	return BaseConfig{
-		Version:            version.TMCoreSemVer,
-		Genesis:            defaultGenesisJSONPath,
-		PrivValidatorKey:   defaultPrivValKeyPath,
-		PrivValidatorState: defaultPrivValStatePath,
-		NodeKey:            defaultNodeKeyPath,
-		Moniker:            defaultMoniker,
-		ProxyApp:           "tcp://127.0.0.1:26658",
-		ABCI:               "socket",
-		LogLevel:           DefaultLogLevel,
-		LogFormat:          LogFormatPlain,
-		FilterPeers:        false,
-		DBBackend:          "goleveldb",
-		DBPath:             DefaultDataDir,
-		SkipAppHash:        false,
+		Version:                version.TMCoreSemVer,
+		Genesis:                defaultGenesisJSONPath,
+		PrivValidatorKey:       defaultPrivValKeyPath,
+		PrivValidatorState:     defaultPrivValStatePath,
+		NodeKey:                defaultNodeKeyPath,
+		Moniker:                defaultMoniker,
+		ProxyApp:               "tcp://127.0.0.1:26658",
+		ABCI:                   "socket",
+		LogLevel:               DefaultLogLevel,
+		LogFormat:              LogFormatPlain,
+		FilterPeers:            false,
+		DBBackend:              "goleveldb",
+		DBPath:                 DefaultDataDir,
+		EventBusBufferCapacity: 0,
+		SkipAppHash:            false,
 	}
 }
 
@@ -308,6 +313,9 @@ func (cfg BaseConfig) ValidateBasic() error {
 	case LogFormatPlain, LogFormatJSON:
 	default:
 		return errors.New("unknown log_format (must be 'plain' or 'json')")
+	}
+	if cfg.EventBusBufferCapacity < 0 {
+		return fmt.Errorf("event_bus_buffer_capacity must be >= 0, got %d", cfg.EventBusBufferCapacity)
 	}
 	return nil
 }
@@ -541,7 +549,7 @@ func (cfg RPCConfig) IsTLSEnabled() bool {
 // P2PConfig
 
 // P2PConfig defines the configuration options for the CometBFT peer-to-peer networking layer
-type P2PConfig struct { //nolint: maligned
+type P2PConfig struct {
 	RootDir string `mapstructure:"home"`
 
 	// Address to listen for incoming connections
@@ -1033,6 +1041,9 @@ type ConsensusConfig struct {
 	PeerQueryMaj23SleepDuration time.Duration `mapstructure:"peer_query_maj23_sleep_duration"`
 
 	DoubleSignCheckHeight int64 `mapstructure:"double_sign_check_height"`
+
+	// BlockTimeTolerance is the maximum allowed difference between the proposed block time and wall-clock time.
+	BlockTimeTolerance time.Duration `mapstructure:"block_time_tolerance"`
 }
 
 // DefaultConsensusConfig returns a default configuration for the consensus service
@@ -1052,6 +1063,7 @@ func DefaultConsensusConfig() *ConsensusConfig {
 		PeerGossipSleepDuration:     100 * time.Millisecond,
 		PeerQueryMaj23SleepDuration: 2000 * time.Millisecond,
 		DoubleSignCheckHeight:       int64(0),
+		BlockTimeTolerance:          60 * time.Second,
 	}
 }
 
@@ -1153,6 +1165,9 @@ func (cfg *ConsensusConfig) ValidateBasic() error {
 	}
 	if cfg.DoubleSignCheckHeight < 0 {
 		return errors.New("double_sign_check_height can't be negative")
+	}
+	if cfg.BlockTimeTolerance <= 0 {
+		return errors.New("block_time_tolerance must be positive")
 	}
 	return nil
 }

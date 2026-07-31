@@ -258,7 +258,6 @@ func validateABCIEvidence(
 	}
 
 	for idx, val := range validators {
-		// Synced from upstream CometBFT v0.38.x.
 		evByz := ev.ByzantineValidators[idx]
 		if !bytes.Equal(evByz.Address, val.Address) {
 			return fmt.Errorf(
