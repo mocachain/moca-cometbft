@@ -147,6 +147,11 @@ filter_peers = {{ .BaseConfig.FilterPeers }}
 # When setting this flag to true, block sync will skip the app hash verification.
 # Please do not enable it if you are running a validator or need very high level security.
 skip_app_hash = {{ .BaseConfig.SkipAppHash }}
+# Buffer capacity for the internal EventBus. A value of 0 means unbuffered
+# (publishers block until subscribers receive). Higher values reduce back-pressure
+# at the cost of memory.
+event_bus_buffer_capacity = {{ .BaseConfig.EventBusBufferCapacity }}
+
 
 #######################################################################
 ###                 Advanced Configuration Options                  ###
