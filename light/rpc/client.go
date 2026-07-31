@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/cometbft/cometbft/votepool"
 	"github.com/cometbft/cometbft/crypto/merkle"
 	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
 	cmtmath "github.com/cometbft/cometbft/libs/math"
@@ -18,6 +17,7 @@ import (
 	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
 	"github.com/cometbft/cometbft/state"
 	"github.com/cometbft/cometbft/types"
+	"github.com/cometbft/cometbft/votepool"
 )
 
 var errNegOrZeroHeight = errors.New("negative or zero height")
