@@ -94,7 +94,7 @@ func (vs *validatorStub) signVote(
 	voteExtension []byte,
 	extEnabled bool,
 ) (*types.Vote, error) {
-	pubKey, err := vs.PrivValidator.GetPubKey()
+	pubKey, err := vs.GetPubKey()
 	if err != nil {
 		return nil, fmt.Errorf("can't get pubkey: %w", err)
 	}
@@ -109,7 +109,7 @@ func (vs *validatorStub) signVote(
 		Extension:        voteExtension,
 	}
 	v := vote.ToProto()
-	if err = vs.PrivValidator.SignVote(test.DefaultTestChainID, v); err != nil {
+	if err = vs.SignVote(test.DefaultTestChainID, v); err != nil {
 		return nil, fmt.Errorf("sign vote failed: %w", err)
 	}
 
@@ -581,7 +581,8 @@ func ensureNewTimeout(timeoutCh <-chan cmtpubsub.Message, height int64, round in
 		"Timeout expired while waiting for NewTimeout event")
 }
 
-func ensureNewProposal(proposalCh <-chan cmtpubsub.Message, height int64, round int32) {
+func ensureNewProposal(proposalCh <-chan cmtpubsub.Message, height int64, round int32) types.BlockID {
+	var blockID types.BlockID
 	select {
 	case <-time.After(ensureTimeout):
 		panic("Timeout expired while waiting for NewProposal event")
@@ -597,7 +598,9 @@ func ensureNewProposal(proposalCh <-chan cmtpubsub.Message, height int64, round 
 		if proposalEvent.Round != round {
 			panic(fmt.Sprintf("expected round %v, got %v", round, proposalEvent.Round))
 		}
+		blockID = proposalEvent.BlockID
 	}
+	return blockID
 }
 
 func ensureNewValidBlock(validBlockCh <-chan cmtpubsub.Message, height int64, round int32) {

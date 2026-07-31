@@ -283,6 +283,7 @@ func (bA *BitArray) PickRandom() (int, bool) {
 
 func (bA *BitArray) getNumTrueIndices() int {
 	if bA.Size() == 0 || len(bA.Elems) == 0 || len(bA.Elems) != numElements(bA.Size()) {
+		// size and elements must be valid to do this calc
 		return 0
 	}
 

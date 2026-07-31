@@ -257,7 +257,7 @@ func (state State) MakeBlock(
 	} else {
 		ts, err := MedianTime(lastCommit, state.LastValidators)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error making block while calculating median time: %w", err)
 		}
 		timestamp = ts
 	}
@@ -275,7 +275,7 @@ func (state State) MakeBlock(
 	}
 
 	// Fill rest of header with state data.
-	block.Header.Populate(
+	block.Populate(
 		state.Version.Consensus, state.ChainID,
 		timestamp, state.LastBlockID,
 		state.Validators.Hash(), state.NextValidators.Hash(),
@@ -300,6 +300,7 @@ func MedianTime(commit *types.Commit, validators *types.ValidatorSet) (time.Time
 			continue
 		}
 		_, validator := validators.GetByAddress(commitSig.ValidatorAddress)
+		// If there's no condition, TestValidateBlockCommit panics; not needed normally.
 		if validator == nil {
 			return time.Time{}, fmt.Errorf("commit validator not found in validator set: %X",
 				commitSig.ValidatorAddress)

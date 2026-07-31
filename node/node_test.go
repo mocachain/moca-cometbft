@@ -39,6 +39,7 @@ import (
 func TestNodeStartStop(t *testing.T) {
 	config := test.ResetTestRoot("node_node_test")
 	defer os.RemoveAll(config.RootDir)
+	config.RPC.GRPCListenAddress = ""
 
 	// create & start node
 	n, err := DefaultNewNode(config, log.TestingLogger())
@@ -101,6 +102,7 @@ func TestSplitAndTrimEmpty(t *testing.T) {
 func TestNodeDelayedStart(t *testing.T) {
 	config := test.ResetTestRoot("node_delayed_start_test")
 	defer os.RemoveAll(config.RootDir)
+	config.RPC.GRPCListenAddress = ""
 	now := cmttime.Now()
 
 	// create & start node
@@ -139,6 +141,7 @@ func TestNodeSetAppVersion(t *testing.T) {
 func TestPprofServer(t *testing.T) {
 	config := test.ResetTestRoot("node_pprof_test")
 	defer os.RemoveAll(config.RootDir)
+	config.RPC.GRPCListenAddress = ""
 	config.RPC.PprofListenAddress = testFreeAddr(t)
 
 	// should not work yet
@@ -164,7 +167,7 @@ func TestNodeSetPrivValTCP(t *testing.T) {
 
 	config := test.ResetTestRoot("node_priv_val_tcp_test")
 	defer os.RemoveAll(config.RootDir)
-	config.BaseConfig.PrivValidatorListenAddr = addr
+	config.PrivValidatorListenAddr = addr
 
 	dialer := privval.DialTCPFn(addr, 100*time.Millisecond, ed25519.GenPrivKey())
 	dialerEndpoint := privval.NewSignerDialerEndpoint(
@@ -198,7 +201,7 @@ func TestPrivValidatorListenAddrNoProtocol(t *testing.T) {
 
 	config := test.ResetTestRoot("node_priv_val_tcp_test")
 	defer os.RemoveAll(config.RootDir)
-	config.BaseConfig.PrivValidatorListenAddr = addrNoPrefix
+	config.PrivValidatorListenAddr = addrNoPrefix
 
 	_, err := DefaultNewNode(config, log.TestingLogger())
 	assert.Error(t, err)
@@ -210,7 +213,7 @@ func TestNodeSetPrivValIPC(t *testing.T) {
 
 	config := test.ResetTestRoot("node_priv_val_tcp_test")
 	defer os.RemoveAll(config.RootDir)
-	config.BaseConfig.PrivValidatorListenAddr = "unix://" + tmpfile
+	config.PrivValidatorListenAddr = "unix://" + tmpfile
 
 	dialer := privval.DialUnixFn(tmpfile)
 	dialerEndpoint := privval.NewSignerDialerEndpoint(
@@ -431,6 +434,7 @@ func TestMaxProposalBlockSize(t *testing.T) {
 func TestNodeNewNodeCustomReactors(t *testing.T) {
 	config := test.ResetTestRoot("node_new_node_custom_reactors_test")
 	defer os.RemoveAll(config.RootDir)
+	config.RPC.GRPCListenAddress = ""
 
 	cr := p2pmock.NewReactor()
 	cr.Channels = []*conn.ChannelDescriptor{

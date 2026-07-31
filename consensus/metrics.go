@@ -51,7 +51,7 @@ type Metrics struct {
 	ByzantineValidatorsPower metrics.Gauge
 
 	// Time between this and the last block.
-	BlockIntervalSeconds metrics.Gauge
+	BlockIntervalSeconds metrics.Histogram
 
 	// Number of transactions.
 	NumTxs metrics.Gauge
@@ -94,9 +94,14 @@ type Metrics struct {
 	QuorumPrevoteDelay metrics.Gauge `metrics_labels:"proposer_address"`
 
 	// QuorumPrecommitDelay is the interval in seconds between the proposal
-	// timestamp and the timestamp of the earliest precommit that achieved a
-	// quorum during the precommit step.
-	// Synced from upstream CometBFT v0.38.x.
+	// timestamp and the timestamp of the earliest precommit that achieved a quorum
+	// during the precommit step.
+	//
+	// To compute it, sum the voting power over each precommit received, in increasing
+	// order of timestamp. The timestamp of the first precommit to increase the sum to
+	// be above 2/3 of the total voting power of the network defines the endpoint
+	// the endpoint of the interval. Subtract the proposal timestamp from this endpoint
+	// to obtain the quorum delay.
 	//metrics:Interval in seconds between the proposal timestamp and the timestamp of the earliest precommit that achieved a quorum.
 	QuorumPrecommitDelay metrics.Gauge `metrics_labels:"proposer_address"`
 
@@ -107,11 +112,9 @@ type Metrics struct {
 	FullPrevoteDelay metrics.Gauge `metrics_labels:"proposer_address"`
 
 	// PrecommitsCounted is the number of precommit votes counted after the timeout commit period has ended.
-	// Synced from upstream CometBFT v0.38.x.
 	PrecommitsCounted metrics.Gauge
 
 	// PrecommitsStakingPercentage is the voting power percentage of precommit votes once the timeout commit period has ended.
-	// Synced from upstream CometBFT v0.38.x.
 	PrecommitsStakingPercentage metrics.Gauge
 
 	// VoteExtensionReceiveCount is the number of vote extensions received by this

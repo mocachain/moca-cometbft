@@ -212,7 +212,7 @@ func NewState(
 
 // SetLogger implements Service.
 func (cs *State) SetLogger(l log.Logger) {
-	cs.BaseService.Logger = l
+	cs.Logger = l
 	cs.timeoutTicker.SetLogger(l)
 }
 
@@ -251,7 +251,7 @@ func (cs *State) GetState() sm.State {
 func (cs *State) GetLastHeight() int64 {
 	cs.mtx.RLock()
 	defer cs.mtx.RUnlock()
-	return cs.RoundState.Height - 1
+	return cs.Height - 1
 }
 
 // GetRoundState returns a shallow copy of the internal consensus state.
@@ -273,7 +273,7 @@ func (cs *State) GetRoundStateJSON() ([]byte, error) {
 func (cs *State) GetRoundStateSimpleJSON() ([]byte, error) {
 	cs.mtx.RLock()
 	defer cs.mtx.RUnlock()
-	return cmtjson.Marshal(cs.RoundState.RoundStateSimple())
+	return cmtjson.Marshal(cs.RoundStateSimple())
 }
 
 // GetValidators returns a copy of the current validators.
@@ -901,19 +901,11 @@ func (cs *State) handleMsg(mi msgInfo) {
 		// This prevented the reactor from being able to retrieve the most updated
 		// version of the RoundState. The reactor needs the updated RoundState to
 		// gossip the now completed block.
-		//
-		// This code can be further improved by either always operating on a copy
-		// of RoundState and only locking when switching out State's copy of
-		// RoundState with the updated copy or by emitting RoundState events in
-		// more places for routines depending on it to listen for.
 		cs.mtx.Unlock()
 
 		cs.mtx.Lock()
 		if added && cs.ProposalBlockParts.IsComplete() {
 			cs.handleCompleteProposal(msg.Height)
-		}
-		if added {
-			cs.statsMsgQueue <- mi
 		}
 
 		if err != nil && msg.Round != cs.Round {
@@ -930,9 +922,6 @@ func (cs *State) handleMsg(mi msgInfo) {
 		// attempt to add the vote and dupeout the validator if its a duplicate signature
 		// if the vote gives us a 2/3-any or 2/3-one, we transition
 		added, err = cs.tryAddVote(msg.Vote, peerID)
-		if added {
-			cs.statsMsgQueue <- mi
-		}
 
 		// if err == ErrAddingVote {
 		// TODO: punish peer
@@ -952,6 +941,12 @@ func (cs *State) handleMsg(mi msgInfo) {
 	default:
 		cs.Logger.Error("unknown msg type", "type", fmt.Sprintf("%T", msg))
 		return
+	}
+
+	if added {
+		cs.mtx.Unlock()
+		cs.statsMsgQueue <- mi
+		cs.mtx.Lock()
 	}
 
 	if err != nil {
@@ -1894,14 +1889,14 @@ func (cs *State) recordMetrics(height int64, block *types.Block) {
 	if height > 1 {
 		lastBlockMeta := cs.blockStore.LoadBlockMeta(height - 1)
 		if lastBlockMeta != nil {
-			cs.metrics.BlockIntervalSeconds.Set(
+			cs.metrics.BlockIntervalSeconds.Observe(
 				block.Time.Sub(lastBlockMeta.Header.Time).Seconds(),
 			)
 		}
 	}
 
-	cs.metrics.NumTxs.Set(float64(len(block.Data.Txs)))
-	cs.metrics.TotalTxs.Add(float64(len(block.Data.Txs)))
+	cs.metrics.NumTxs.Set(float64(len(block.Txs)))
+	cs.metrics.TotalTxs.Add(float64(len(block.Txs)))
 	cs.metrics.BlockSizeBytes.Set(float64(block.Size()))
 	cs.metrics.ChainSizeBytes.Add(float64(block.Size()))
 	cs.metrics.CommittedHeight.Set(float64(block.Height))
@@ -2222,16 +2217,14 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 				return false, err
 			}
 		}
-	} else {
+	} else if len(vote.Extension) > 0 || len(vote.ExtensionSignature) > 0 {
 		// Vote extensions are not enabled on the network.
 		// Reject the vote, as it is malformed
 		//
 		// TODO punish a peer if it sent a vote with an extension when the feature
 		// is disabled on the network.
 		// https://github.com/tendermint/tendermint/issues/8565
-		if len(vote.Extension) > 0 || len(vote.ExtensionSignature) > 0 {
-			return false, fmt.Errorf("received vote with vote extension for height %v (extensions disabled) from peer ID %s", vote.Height, peerID)
-		}
+		return false, fmt.Errorf("received vote with vote extension for height %v (extensions disabled) from peer ID %s", vote.Height, peerID)
 	}
 
 	height := cs.Height
@@ -2503,11 +2496,11 @@ func (cs *State) checkDoubleSigningRisk(height int64) error {
 	if cs.privValidator != nil && cs.privValidatorPubKey != nil && cs.config.DoubleSignCheckHeight > 0 && height > 0 {
 		valAddr := cs.privValidatorPubKey.Address()
 		doubleSignCheckHeight := cs.config.DoubleSignCheckHeight
-		if doubleSignCheckHeight > height {
-			doubleSignCheckHeight = height
+		if doubleSignCheckHeight >= height {
+			doubleSignCheckHeight = height - 1
 		}
 
-		for i := int64(1); i < doubleSignCheckHeight; i++ {
+		for i := int64(1); i <= doubleSignCheckHeight; i++ {
 			lastCommit := cs.blockStore.LoadSeenCommit(height - i)
 			if lastCommit != nil {
 				for sigIdx, s := range lastCommit.Signatures {
@@ -2521,6 +2514,61 @@ func (cs *State) checkDoubleSigningRisk(height int64) error {
 	}
 
 	return nil
+}
+
+// emitPrecommitTimeoutMetrics calculates and emits metrics for votes collected
+// during the TimeoutCommit period.
+func (cs *State) emitPrecommitTimeoutMetrics(round int32) {
+	// Count votes and accumulate voting power from LastCommit
+	// (these are the votes collected during TimeoutCommit for the previous height)
+	totalVotesCollected := 0
+	totalVotingPowerCollected := int64(0)
+
+	for _, vote := range cs.Votes.Precommits(round).List() {
+		totalVotesCollected++
+		_, val := cs.Validators.GetByAddress(vote.ValidatorAddress)
+		if val != nil {
+			totalVotingPowerCollected += val.VotingPower
+		}
+	}
+
+	// Calculate stake percentage of votes collected during TimeoutCommit
+	totalPossibleVotingPower := cs.Validators.TotalVotingPower()
+	var stakePercentage float64
+	if totalPossibleVotingPower > 0 {
+		stakePercentage = float64(totalVotingPowerCollected) / float64(totalPossibleVotingPower)
+	}
+
+	// Emit metrics showing what was collected during TimeoutCommit
+	cs.metrics.PrecommitsCounted.Set(float64(totalVotesCollected))
+	cs.metrics.PrecommitsStakingPercentage.Set(stakePercentage)
+
+	cs.Logger.Debug("emitted post-quorum precommit metrics",
+		"votes_collected", totalVotesCollected,
+		"stake_percentage", stakePercentage)
+}
+
+func (cs *State) calculatePrecommitMessageDelayMetrics() {
+	if cs.Proposal == nil {
+		return
+	}
+
+	ps := cs.Votes.Precommits(cs.Round)
+	pl := ps.List()
+
+	sort.Slice(pl, func(i, j int) bool {
+		return pl[i].Timestamp.Before(pl[j].Timestamp)
+	})
+
+	var votingPowerSeen int64
+	for _, v := range pl {
+		_, val := cs.Validators.GetByAddress(v.ValidatorAddress)
+		votingPowerSeen += val.VotingPower
+		if votingPowerSeen >= cs.Validators.TotalVotingPower()*2/3+1 {
+			cs.metrics.QuorumPrecommitDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
+			break
+		}
+	}
 }
 
 func (cs *State) calculatePrevoteMessageDelayMetrics() {
@@ -2546,63 +2594,6 @@ func (cs *State) calculatePrevoteMessageDelayMetrics() {
 	}
 	if ps.HasAll() {
 		cs.metrics.FullPrevoteDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(pl[len(pl)-1].Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
-	}
-}
-
-// emitPrecommitTimeoutMetrics calculates and emits metrics for the precommit
-// votes collected during the TimeoutCommit period.
-// Synced from upstream CometBFT v0.38.x.
-func (cs *State) emitPrecommitTimeoutMetrics(round int32) {
-	totalVotesCollected := 0
-	totalVotingPowerCollected := int64(0)
-
-	for _, vote := range cs.Votes.Precommits(round).List() {
-		totalVotesCollected++
-		_, val := cs.Validators.GetByAddress(vote.ValidatorAddress)
-		if val != nil {
-			totalVotingPowerCollected += val.VotingPower
-		}
-	}
-
-	totalPossibleVotingPower := cs.Validators.TotalVotingPower()
-	var stakePercentage float64
-	if totalPossibleVotingPower > 0 {
-		stakePercentage = float64(totalVotingPowerCollected) / float64(totalPossibleVotingPower)
-	}
-
-	cs.metrics.PrecommitsCounted.Set(float64(totalVotesCollected))
-	cs.metrics.PrecommitsStakingPercentage.Set(stakePercentage)
-
-	cs.Logger.Debug("emitted post-quorum precommit metrics",
-		"votes_collected", totalVotesCollected,
-		"stake_percentage", stakePercentage)
-}
-
-// calculatePrecommitMessageDelayMetrics emits the QuorumPrecommitDelay metric.
-// Synced from upstream CometBFT v0.38.x.
-func (cs *State) calculatePrecommitMessageDelayMetrics() {
-	if cs.Proposal == nil {
-		return
-	}
-
-	ps := cs.Votes.Precommits(cs.Round)
-	pl := ps.List()
-
-	sort.Slice(pl, func(i, j int) bool {
-		return pl[i].Timestamp.Before(pl[j].Timestamp)
-	})
-
-	var votingPowerSeen int64
-	for _, v := range pl {
-		_, val := cs.Validators.GetByAddress(v.ValidatorAddress)
-		if val == nil {
-			continue
-		}
-		votingPowerSeen += val.VotingPower
-		if votingPowerSeen >= cs.Validators.TotalVotingPower()*2/3+1 {
-			cs.metrics.QuorumPrecommitDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
-			break
-		}
 	}
 }
 

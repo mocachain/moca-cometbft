@@ -145,7 +145,6 @@ func TestFinalizeBlockDecidedLastCommit(t *testing.T) {
 			reveal := makeReveal(state, state.Validators.Proposer.Address, privVals, 2)
 			block, err := state.MakeBlock(2, test.MakeNTxs(state.LastBlockHeight, 10), lastCommit.ToCommit(), nil, reveal, state.Validators.Proposer.Address)
 			require.NoError(t, err)
-			// block := makeBlock(state, 2, lastCommit.ToCommit())
 			bps, err := block.MakePartSet(testPartSize)
 			require.NoError(t, err)
 			blockID := types.BlockID{Hash: block.Hash(), PartSetHeader: bps.Header()}
@@ -354,7 +353,7 @@ func TestFinalizeBlockMisbehavior(t *testing.T) {
 	block, err := makeBlock(state, 1, new(types.Commit))
 	require.NoError(t, err)
 	block.Evidence = types.EvidenceData{Evidence: ev}
-	block.Header.EvidenceHash = block.Evidence.Hash()
+	block.EvidenceHash = block.Evidence.Hash()
 	bps, err := block.MakePartSet(testPartSize)
 	require.NoError(t, err)
 
@@ -410,7 +409,7 @@ func TestProcessProposal(t *testing.T) {
 		pk, err := privVal.GetPubKey()
 		require.NoError(t, err)
 		idx, _ := state.Validators.GetByAddress(pk.Address())
-		vote := types.MakeVoteNoError(t, privVal, block0.Header.ChainID, idx, height-1, 0, 2, blockID, time.Now())
+		vote := types.MakeVoteNoError(t, privVal, block0.ChainID, idx, height-1, 0, 2, blockID, time.Now())
 		addr := pk.Address()
 		voteInfos = append(voteInfos,
 			abci.VoteInfo{
@@ -434,8 +433,8 @@ func TestProcessProposal(t *testing.T) {
 	expectedRpp := &abci.RequestProcessProposal{
 		Txs:         block1.Txs.ToSliceOfBytes(),
 		Hash:        block1.Hash(),
-		Height:      block1.Header.Height,
-		Time:        block1.Header.Time,
+		Height:      block1.Height,
+		Time:        block1.Time,
 		Misbehavior: block1.Evidence.Evidence.ToABCI(),
 		ProposedLastCommit: abci.CommitInfo{
 			Round: 0,
@@ -509,7 +508,7 @@ func TestValidateValidatorUpdates(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			err := sm.ValidateValidatorUpdates(tc.abciUpdates, tc.validatorParams)
 			if tc.shouldErr {
@@ -586,7 +585,7 @@ func TestUpdateValidators(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			updates, err := types.PB2TM.ValidatorUpdates(tc.abciUpdates)
 			assert.NoError(t, err)
@@ -854,7 +853,7 @@ func TestPrepareProposalTxsAllIncluded(t *testing.T) {
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, nil, pa)
 	require.NoError(t, err)
 
-	for i, tx := range block.Data.Txs {
+	for i, tx := range block.Txs {
 		require.Equal(t, txs[i], tx)
 	}
 
@@ -908,7 +907,7 @@ func TestPrepareProposalReorderTxs(t *testing.T) {
 	require.NoError(t, err)
 	block, err := blockExec.CreateProposalBlock(ctx, height, state, commit, nil, pa)
 	require.NoError(t, err)
-	for i, tx := range block.Data.Txs {
+	for i, tx := range block.Txs {
 		require.Equal(t, txs[i], tx)
 	}
 
@@ -1093,26 +1092,26 @@ func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
 	}{
 		{
 			name:                  "missing extension data on first required height",
-			height:                2,
-			extensionEnableHeight: 1,
+			height:                3,
+			extensionEnableHeight: 2,
 			expectPanic:           true,
 		},
 		{
 			name:                  "missing extension during before required height",
-			height:                2,
-			extensionEnableHeight: 2,
+			height:                3,
+			extensionEnableHeight: 3,
 			expectPanic:           false,
 		},
 		{
 			name:                  "missing extension data and not required",
-			height:                2,
+			height:                3,
 			extensionEnableHeight: 0,
 			expectPanic:           false,
 		},
 		{
 			name:                  "missing extension data and required in two heights",
-			height:                2,
-			extensionEnableHeight: 3,
+			height:                3,
+			extensionEnableHeight: 4,
 			expectPanic:           false,
 		},
 	} {
@@ -1167,7 +1166,8 @@ func TestCreateProposalAbsentVoteExtensions(t *testing.T) {
 			stripSignatures(lastCommit)
 			if testCase.expectPanic {
 				require.Panics(t, func() {
-					blockExec.CreateProposalBlock(ctx, testCase.height, state, lastCommit, nil, pa) //nolint:errcheck
+					_, err := blockExec.CreateProposalBlock(ctx, testCase.height, state, lastCommit, nil, pa)
+					require.NoError(t, err)
 				})
 			} else {
 				_, err = blockExec.CreateProposalBlock(ctx, testCase.height, state, lastCommit, nil, pa)
