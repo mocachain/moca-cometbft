@@ -312,7 +312,6 @@ func (vals *ValidatorSet) Size() int {
 
 // Forces recalculation of the set's total voting power.
 // Returns an error if total voting power exceeds MaxTotalVotingPower.
-// Synced from upstream CometBFT v0.38.x: returns an error instead of panicking.
 func (vals *ValidatorSet) updateTotalVotingPower() error {
 	sum := int64(0)
 	for _, val := range vals.Validators {
@@ -329,7 +328,6 @@ func (vals *ValidatorSet) updateTotalVotingPower() error {
 
 // TotalVotingPowerSafe returns the sum of the voting powers of all validators,
 // or an error if the total exceeds MaxTotalVotingPower.
-// Synced from upstream CometBFT v0.38.x.
 func (vals *ValidatorSet) TotalVotingPowerSafe() (int64, error) {
 	if vals.totalVotingPower == 0 {
 		if err := vals.updateTotalVotingPower(); err != nil {
@@ -679,7 +677,7 @@ func (vals *ValidatorSet) updateWithChangeSet(changes []*Validator, allowDeletes
 	// Should go after additions.
 	vals.checkAllKeysHaveSameType()
 
-	if err := vals.updateTotalVotingPower(); err != nil {
+	if err = vals.updateTotalVotingPower(); err != nil {
 		panic(err)
 	}
 
@@ -978,7 +976,7 @@ func ValidatorSetFromProto(vp *cmtproto.ValidatorSet) (*ValidatorSet, error) {
 	// power hence we need to recompute it.
 	// FIXME: We should look to remove TotalVotingPower from proto or add it in the validators hash
 	// so we don't have to do this
-	// NOTE: Use TotalVotingPowerSafe to return an error instead of panicking on invalid input.
+	// NOTE: Use TotalVotingPowerSafe to return error instead of panicking on invalid input.
 	if _, err := vals.TotalVotingPowerSafe(); err != nil {
 		return nil, err
 	}

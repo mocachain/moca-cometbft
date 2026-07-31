@@ -117,7 +117,7 @@ func TestConfig() *Config {
 
 // SetRoot sets the RootDir for all Config structs
 func (cfg *Config) SetRoot(root string) *Config {
-	cfg.BaseConfig.RootDir = root
+	cfg.RootDir = root
 	cfg.RPC.RootDir = root
 	cfg.P2P.RootDir = root
 	cfg.Mempool.RootDir = root
@@ -871,9 +871,8 @@ type StateSyncConfig struct {
 	DiscoveryTime       time.Duration `mapstructure:"discovery_time"`
 	ChunkRequestTimeout time.Duration `mapstructure:"chunk_request_timeout"`
 	ChunkFetchers       int32         `mapstructure:"chunk_fetchers"`
-	// MaxSnapshotChunks is synced from upstream CometBFT v0.38.x.
-	MaxSnapshotChunks uint32 `mapstructure:"max_snapshot_chunks"`
-	TargetHeight      int64  `mapstructure:"target_height"`
+	MaxSnapshotChunks   uint32        `mapstructure:"max_snapshot_chunks"`
+	TargetHeight        int64         `mapstructure:"target_height"`
 }
 
 func (cfg *StateSyncConfig) TrustHashBytes() []byte {
@@ -952,6 +951,10 @@ func (cfg *StateSyncConfig) ValidateBasic() error {
 
 		if cfg.ChunkFetchers <= 0 {
 			return errors.New("chunk_fetchers is required")
+		}
+
+		if cfg.MaxSnapshotChunks == 0 {
+			return errors.New("max_snapshot_chunks is required")
 		}
 	}
 

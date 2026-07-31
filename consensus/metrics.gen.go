@@ -88,7 +88,7 @@ func PrometheusMetrics(namespace string, labelsAndValues ...string) *Metrics {
 			Name:      "byzantine_validators_power",
 			Help:      "Total power of the byzantine validators.",
 		}, labels).With(labelsAndValues...),
-		BlockIntervalSeconds: prometheus.NewGaugeFrom(stdprometheus.GaugeOpts{
+		BlockIntervalSeconds: prometheus.NewHistogramFrom(stdprometheus.HistogramOpts{
 			Namespace: namespace,
 			Subsystem: MetricsSubsystem,
 			Name:      "block_interval_seconds",
@@ -233,7 +233,7 @@ func NopMetrics() *Metrics {
 		MissingValidatorsPower:      discard.NewGauge(),
 		ByzantineValidators:         discard.NewGauge(),
 		ByzantineValidatorsPower:    discard.NewGauge(),
-		BlockIntervalSeconds:        discard.NewGauge(),
+		BlockIntervalSeconds:        discard.NewHistogram(),
 		NumTxs:                      discard.NewGauge(),
 		BlockSizeBytes:              discard.NewGauge(),
 		ChainSizeBytes:              discard.NewCounter(),
