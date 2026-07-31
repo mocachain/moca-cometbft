@@ -117,7 +117,7 @@ func NewReactorWithAddr(state sm.State, blockExec *sm.BlockExecutor, store *stor
 	}
 	pool := NewBlockPool(startHeight, requestsCh, errorsCh)
 
-	bcR := &Reactor{
+	r := &Reactor{
 		initialState: state,
 		blockExec:    blockExec,
 		store:        store,
@@ -127,68 +127,68 @@ func NewReactorWithAddr(state sm.State, blockExec *sm.BlockExecutor, store *stor
 		errorsCh:     errorsCh,
 		metrics:      metrics,
 	}
-	bcR.blockSync.Store(blockSync)
-	bcR.BaseReactor = *p2p.NewBaseReactor("Reactor", bcR)
+	r.blockSync.Store(blockSync)
+	r.BaseReactor = *p2p.NewBaseReactor("Reactor", r)
 
 	for _, option := range options {
-		option(bcR)
+		option(r)
 	}
 
-	return bcR
+	return r
 }
 
 // SetLogger implements service.Service by setting the logger on reactor and pool.
-func (bcR *Reactor) SetLogger(l log.Logger) {
-	bcR.Logger = l
-	bcR.pool.Logger = l
+func (r *Reactor) SetLogger(l log.Logger) {
+	r.Logger = l
+	r.pool.Logger = l
 }
 
 // OnStart implements service.Service.
-func (bcR *Reactor) OnStart() error {
-	if bcR.blockSync.Load() {
-		err := bcR.pool.Start()
+func (r *Reactor) OnStart() error {
+	if r.blockSync.Load() {
+		err := r.pool.Start()
 		if err != nil {
 			return err
 		}
-		bcR.poolRoutineWg.Add(1)
+		r.poolRoutineWg.Add(1)
 		go func() {
-			defer bcR.poolRoutineWg.Done()
-			bcR.poolRoutine(false)
+			defer r.poolRoutineWg.Done()
+			r.poolRoutine(false)
 		}()
 	}
 	return nil
 }
 
 // SwitchToBlockSync is called by the state sync reactor when switching to block sync.
-func (bcR *Reactor) SwitchToBlockSync(state sm.State) error {
-	bcR.blockSync.Store(true)
-	bcR.initialState = state
+func (r *Reactor) SwitchToBlockSync(state sm.State) error {
+	r.blockSync.Store(true)
+	r.initialState = state
 
-	bcR.pool.height = state.LastBlockHeight + 1
-	err := bcR.pool.Start()
+	r.pool.height = state.LastBlockHeight + 1
+	err := r.pool.Start()
 	if err != nil {
 		return err
 	}
-	bcR.poolRoutineWg.Add(1)
+	r.poolRoutineWg.Add(1)
 	go func() {
-		defer bcR.poolRoutineWg.Done()
-		bcR.poolRoutine(true)
+		defer r.poolRoutineWg.Done()
+		r.poolRoutine(true)
 	}()
 	return nil
 }
 
 // OnStop implements service.Service.
-func (bcR *Reactor) OnStop() {
-	if bcR.blockSync.Load() {
-		if err := bcR.pool.Stop(); err != nil {
-			bcR.Logger.Error("Error stopping pool", "err", err)
+func (r *Reactor) OnStop() {
+	if r.blockSync.Load() {
+		if err := r.pool.Stop(); err != nil {
+			r.Logger.Error("Error stopping pool", "err", err)
 		}
-		bcR.poolRoutineWg.Wait()
+		r.poolRoutineWg.Wait()
 	}
 }
 
 // GetChannels implements Reactor
-func (bcR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
+func (r *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 	return []*p2p.ChannelDescriptor{
 		{
 			ID:                  BlocksyncChannel,
@@ -202,12 +202,12 @@ func (bcR *Reactor) GetChannels() []*p2p.ChannelDescriptor {
 }
 
 // AddPeer implements Reactor by sending our state to peer.
-func (bcR *Reactor) AddPeer(peer p2p.Peer) {
+func (r *Reactor) AddPeer(peer p2p.Peer) {
 	peer.Send(p2p.Envelope{
 		ChannelID: BlocksyncChannel,
 		Message: &bcproto.StatusResponse{
-			Base:   bcR.store.Base(),
-			Height: bcR.store.Height(),
+			Base:   r.store.Base(),
+			Height: r.store.Height(),
 		},
 	})
 	// it's OK if send fails. will try later in poolRoutine
@@ -217,39 +217,39 @@ func (bcR *Reactor) AddPeer(peer p2p.Peer) {
 }
 
 // RemovePeer implements Reactor by removing peer from the pool.
-func (bcR *Reactor) RemovePeer(peer p2p.Peer, _ interface{}) {
-	bcR.pool.RemovePeer(peer.ID())
+func (r *Reactor) RemovePeer(peer p2p.Peer, _ interface{}) {
+	r.pool.RemovePeer(peer.ID())
 }
 
 // respondToPeer loads a block and sends it to the requesting peer,
 // if we have it. Otherwise, we'll respond saying we don't have it.
-func (bcR *Reactor) respondToPeer(msg *bcproto.BlockRequest, src p2p.Peer) (queued bool) {
-	block := bcR.store.LoadBlock(msg.Height)
+func (r *Reactor) respondToPeer(msg *bcproto.BlockRequest, src p2p.Peer) (queued bool) {
+	block := r.store.LoadBlock(msg.Height)
 	if block == nil {
-		bcR.Logger.Info("Peer asking for a block we don't have", "src", src, "height", msg.Height)
+		r.Logger.Info("Peer asking for a block we don't have", "src", src, "height", msg.Height)
 		return src.TrySend(p2p.Envelope{
 			ChannelID: BlocksyncChannel,
 			Message:   &bcproto.NoBlockResponse{Height: msg.Height},
 		})
 	}
 
-	state, err := bcR.blockExec.Store().Load()
+	state, err := r.blockExec.Store().Load()
 	if err != nil {
-		bcR.Logger.Error("loading state", "err", err)
+		r.Logger.Error("loading state", "err", err)
 		return false
 	}
 	var extCommit *types.ExtendedCommit
 	if state.ConsensusParams.ABCI.VoteExtensionsEnabled(msg.Height) {
-		extCommit = bcR.store.LoadBlockExtendedCommit(msg.Height)
+		extCommit = r.store.LoadBlockExtendedCommit(msg.Height)
 		if extCommit == nil {
-			bcR.Logger.Error("found block in store with no extended commit", "block", block)
+			r.Logger.Error("found block in store with no extended commit", "block", block)
 			return false
 		}
 	}
 
 	bl, err := block.ToProto()
 	if err != nil {
-		bcR.Logger.Error("could not convert msg to protobuf", "err", err)
+		r.Logger.Error("could not convert msg to protobuf", "err", err)
 		return false
 	}
 
@@ -287,7 +287,7 @@ func (r *Reactor) handlePeerResponse(msg *bcproto.BlockResponse, src p2p.Peer) {
 
 // FilterMsgBytes implements p2p.MsgBytesFilter and rejects messages from
 // unexpected peers before unmarshalling the request.
-func (bcR *Reactor) FilterMsgBytes(chID byte, src p2p.Peer, msgBytes []byte) error {
+func (r *Reactor) FilterMsgBytes(chID byte, src p2p.Peer, msgBytes []byte) error {
 	// do not check invalid messages, will fail unmarshalling
 	if chID != BlocksyncChannel || len(msgBytes) == 0 {
 		return nil
@@ -306,19 +306,19 @@ func (bcR *Reactor) FilterMsgBytes(chID byte, src p2p.Peer, msgBytes []byte) err
 	}
 
 	// Never ran blocksync on this node — any BlockResponse is unsolicited.
-	if !bcR.blockSync.Load() {
+	if !r.blockSync.Load() {
 		return errors.New("unsolicited BlockResponse: blocksync not active")
 	}
 	// Pool has stopped (switched to consensus). Requests we sent before the
 	// transition are still in flight; the peers are honest and must not be
 	// disconnected for answering our own requests. Still enforce the sig-count
 	// guard below, since any connected peer can reach this path now.
-	if !bcR.pool.IsRunning() {
+	if !r.pool.IsRunning() {
 		return validateMaxVotes(stub.BlockResponse)
 	}
 
 	// ensure we have an outstanding request to this peer
-	if !bcR.pool.HasPendingRequestFrom(src.ID()) {
+	if !r.pool.HasPendingRequestFrom(src.ID()) {
 		return fmt.Errorf("unsolicited BlockResponse from peer %s", src.ID())
 	}
 
@@ -355,42 +355,42 @@ func validateMaxVotes(br *bcproto.SigCountBlockResponse) error {
 }
 
 // Receive implements Reactor by handling 4 types of messages (look below).
-func (bcR *Reactor) Receive(e p2p.Envelope) {
+func (r *Reactor) Receive(e p2p.Envelope) {
 	if err := ValidateMsg(e.Message); err != nil {
-		bcR.Logger.Error("Peer sent us invalid msg", "peer", e.Src, "msg", e.Message, "err", err)
-		bcR.Switch.StopPeerForError(e.Src, err)
+		r.Logger.Error("Peer sent us invalid msg", "peer", e.Src, "msg", e.Message, "err", err)
+		r.Switch.StopPeerForError(e.Src, err)
 		return
 	}
 
-	bcR.Logger.Debug("Receive", "e.Src", e.Src, "chID", e.ChannelID, "msg", e.Message)
+	r.Logger.Debug("Receive", "e.Src", e.Src, "chID", e.ChannelID, "msg", e.Message)
 
 	switch msg := e.Message.(type) {
 	case *bcproto.BlockRequest:
-		bcR.respondToPeer(msg, e.Src)
+		r.respondToPeer(msg, e.Src)
 	case *bcproto.BlockResponse:
-		bcR.handlePeerResponse(msg, e.Src)
+		r.handlePeerResponse(msg, e.Src)
 	case *bcproto.StatusRequest:
 		// Send peer our state.
 		e.Src.TrySend(p2p.Envelope{
 			ChannelID: BlocksyncChannel,
 			Message: &bcproto.StatusResponse{
-				Height: bcR.store.Height(),
-				Base:   bcR.store.Base(),
+				Height: r.store.Height(),
+				Base:   r.store.Base(),
 			},
 		})
 	case *bcproto.StatusResponse:
 		// Got a peer status. Unverified.
-		bcR.pool.SetPeerRange(e.Src.ID(), msg.Base, msg.Height)
+		r.pool.SetPeerRange(e.Src.ID(), msg.Base, msg.Height)
 	case *bcproto.NoBlockResponse:
-		bcR.Logger.Debug("Peer does not have requested block", "peer", e.Src, "height", msg.Height)
-		bcR.pool.RedoRequestFrom(msg.Height, e.Src.ID())
+		r.Logger.Debug("Peer does not have requested block", "peer", e.Src, "height", msg.Height)
+		r.pool.RedoRequestFrom(msg.Height, e.Src.ID())
 	default:
-		bcR.Logger.Error(fmt.Sprintf("Unknown message type %v", reflect.TypeOf(msg)))
+		r.Logger.Error(fmt.Sprintf("Unknown message type %v", reflect.TypeOf(msg)))
 	}
 }
 
-func (bcR *Reactor) localNodeBlocksTheChain(state sm.State) bool {
-	_, val := state.Validators.GetByAddress(bcR.localAddr)
+func (r *Reactor) localNodeBlocksTheChain(state sm.State) bool {
+	_, val := state.Validators.GetByAddress(r.localAddr)
 	if val == nil {
 		return false
 	}
@@ -693,8 +693,8 @@ func (r *Reactor) handleValidationFailure(blockA, blockB *types.Block, err error
 }
 
 // BroadcastStatusRequest broadcasts `BlockStore` base and height.
-func (bcR *Reactor) BroadcastStatusRequest() {
-	bcR.Switch.Broadcast(p2p.Envelope{
+func (r *Reactor) BroadcastStatusRequest() {
+	r.Switch.Broadcast(p2p.Envelope{
 		ChannelID: BlocksyncChannel,
 		Message:   &bcproto.StatusRequest{},
 	})
@@ -702,5 +702,5 @@ func (bcR *Reactor) BroadcastStatusRequest() {
 
 // ReactorSkipAppHashVerify sets the skip app hash verification flag
 func ReactorSkipAppHashVerify(skipAppHashVerify bool) ReactorOption {
-	return func(bcR *Reactor) { bcR.skipAppHashVerify = skipAppHashVerify }
+	return func(r *Reactor) { r.skipAppHashVerify = skipAppHashVerify }
 }
