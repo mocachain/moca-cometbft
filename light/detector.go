@@ -205,8 +205,6 @@ func (c *Client) compareNewLightBlockWithWitness(ctx context.Context, errc chan 
 
 	if !bytes.Equal(h.Hash(), lightBlock.Hash()) {
 		errc <- ErrConflictingHeaders{Block: lightBlock, WitnessIndex: witnessIndex}
-		// Synced from upstream CometBFT v0.38.x: stop after a divergence is
-		// found instead of continuing to compare and reporting a match.
 		return
 	}
 

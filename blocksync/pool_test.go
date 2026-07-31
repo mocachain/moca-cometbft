@@ -191,7 +191,8 @@ func TestBlockPoolTimeout(t *testing.T) {
 	// Introduce each peer.
 	go func() {
 		for _, peer := range peers {
-			pool.SetPeerRange(peer.id, peer.base, peer.height)
+			// Force uniform base so every peer contributes to maxPeerHeight at pool startup.
+			pool.SetPeerRange(peer.id, start, peer.height)
 		}
 	}()
 
@@ -527,8 +528,6 @@ func TestBlockPoolBansPeerWithBaseGreaterThanHeight(t *testing.T) {
 // TestBlockPoolMaxPeerHeightRefreshesOnPopRequest covers:
 //  1. A peer whose base is ahead of pool.height must not contribute to maxPeerHeight
 //  2. When pool.height advances past a pruned peer's base, maxPeerHeight is re-evaluated.
-//
-// Synced from upstream CometBFT v0.38.x.
 func TestBlockPoolMaxPeerHeightRefreshesOnPopRequest(t *testing.T) {
 	requestsCh := make(chan BlockRequest, 10)
 	errorsCh := make(chan peerError, 10)
