@@ -440,8 +440,6 @@ func (r *Reactor) ensurePeersRoutine() {
 // heuristic that we haven't perfected yet, or, perhaps is manually edited by
 // the node operator. It should not be used to compute what addresses are
 // already connected or not.
-// Synced from upstream CometBFT v0.38.x: ensurePeersPeriodElapsed guards
-// against sending a pexRequest too soon when triggered off-period.
 func (r *Reactor) ensurePeers(ensurePeersPeriodElapsed bool) {
 	var (
 		out, in, dial = r.Switch.NumPeers()

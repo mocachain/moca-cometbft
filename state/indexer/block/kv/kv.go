@@ -389,12 +389,12 @@ func (idx *BlockerIndexer) setTmpHeights(tmpHeights map[string][]byte, it dbm.It
 	// event sequence in the result map as well.
 	eventSeq, _ := parseEventSeqFromEventKey(it.Key())
 
-	// Synced from upstream CometBFT v0.38.x: copy the value because the
-	// iterator reuses its buffer, which otherwise drops block_search results.
+	// Copy the value because the iterator will be reused.
 	value := make([]byte, len(it.Value()))
 	copy(value, it.Value())
 
 	tmpHeights[string(value)+strconv.FormatInt(eventSeq, 10)] = value
+
 }
 
 // match returns all matching heights that meet a given query condition and start

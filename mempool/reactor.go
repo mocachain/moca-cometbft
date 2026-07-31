@@ -173,10 +173,16 @@ func (memR *Reactor) receiveRoutine() {
 
 				memR.checkTxCh <- CheckTxRequest{Tx: ntx, TxInfo: txInfo, Err: errChan}
 				err := <-errChan
-				if errors.Is(err, ErrTxInCache) {
-					memR.Logger.Debug("Tx already exists in cache", "tx", ntx.String())
-				} else if err != nil {
-					memR.Logger.Info("Could not check tx", "tx", ntx.String(), "err", err)
+				if err != nil {
+					switch {
+					case errors.Is(err, ErrTxInCache):
+						memR.Logger.Debug("Tx already exists in cache", "tx", ntx.String())
+					case errors.As(err, &ErrMempoolIsFull{}):
+						// using debug level to avoid flooding when traffic is high
+						memR.Logger.Debug(err.Error())
+					default:
+						memR.Logger.Info("Could not check tx", "tx", ntx.String(), "err", err)
+					}
 				}
 			}
 
