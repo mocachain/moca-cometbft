@@ -3,6 +3,7 @@ package votepool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -36,6 +37,9 @@ const (
 
 	// The event type of adding new votes to the Pool successfully.
 	eventBusVotePoolUpdates = "votePoolUpdates"
+
+	// Event bus client ID used for the validator-update subscription.
+	votePoolSubscriber = "VotePoolService"
 )
 
 // voteStore stores one type of votes.
@@ -204,6 +208,12 @@ func (p *Pool) OnStart() error {
 func (p *Pool) OnStop() {
 	p.BaseService.OnStop()
 	p.ticker.Stop()
+	// Without this the event bus keeps the "VotePoolService" client registered,
+	// so a restart re-subscribing with the same ID gets ErrAlreadySubscribed and
+	// validatorUpdateRoutine exits immediately -- validator updates silently stop.
+	if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil {
+		p.Logger.Error("Cannot unsubscribe from event bus", "err", err.Error())
+	}
 }
 
 // AddVote implements VotePool.
@@ -273,37 +283,72 @@ func (p *Pool) FlushVotes() {
 }
 
 // validatorUpdateRoutine will sync validator updates.
+//
+// A cancelled subscription is recoverable: pubsub cancels the whole subscription
+// when its buffer overflows, and simply returning here would freeze the validator
+// set for the lifetime of the process -- removed validators would keep being
+// accepted and new ones rejected. Resubscribe instead.
 func (p *Pool) validatorUpdateRoutine() {
-	if !p.IsRunning() || !p.eventBus.IsRunning() {
-		return
+	for {
+		if !p.IsRunning() || !p.eventBus.IsRunning() {
+			return
+		}
+		sub, err := p.eventBus.Subscribe(context.Background(), votePoolSubscriber, types.EventQueryValidatorSetUpdates, eventBusSubscribeCap)
+		if err != nil {
+			p.Logger.Error("Cannot subscribe to validator set update event", "err", err.Error())
+			return
+		}
+		if resubscribe := p.consumeValidatorUpdates(sub); !resubscribe {
+			return
+		}
+		p.Logger.Error("Validator update subscription cancelled; resubscribing")
+		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil {
+			p.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
+			return
+		}
 	}
-	sub, err := p.eventBus.Subscribe(context.Background(), "VotePoolService", types.EventQueryValidatorSetUpdates, eventBusSubscribeCap)
-	if err != nil {
-		p.Logger.Error("Cannot subscribe to validator set update event", "err", err.Error())
-		return
-	}
+}
+
+// consumeValidatorUpdates drains a subscription, reporting whether the caller
+// should resubscribe (true) or shut down (false).
+func (p *Pool) consumeValidatorUpdates(sub types.Subscription) bool {
 	for {
 		select {
 		case validatorData := <-sub.Out():
-			changes := validatorData.Data().(types.EventDataValidatorSetUpdates)
-			p.validatorVerifier.updateValidators(changes.ValidatorUpdates)
+			// Two-return form: a different payload published under this query would
+			// otherwise panic the routine.
+			changes, ok := validatorData.Data().(types.EventDataValidatorSetUpdates)
+			if !ok {
+				p.Logger.Error("Unexpected payload on validator set update event",
+					"type", fmt.Sprintf("%T", validatorData.Data()))
+				continue
+			}
+			if err := p.validatorVerifier.updateValidators(changes.ValidatorUpdates); err != nil {
+				p.Logger.Error("Validator set update applied with errors", "err", err.Error())
+			}
 			p.Logger.Info("Validators updated", "changes", changes.ValidatorUpdates)
 		case <-sub.Canceled():
-			return
+			return true
 		case <-p.Quit():
-			return
+			return false
 		}
 	}
 }
 
 // pruneVoteRoutine will prune votes at the given intervals.
 func (p *Pool) pruneVoteRoutine() {
-	for range p.ticker.C {
-		for _, s := range p.stores {
-			keys := s.pruneVotes()
-			for _, key := range keys {
-				p.cache.Remove(key)
+	for {
+		select {
+		case <-p.ticker.C:
+			for _, s := range p.stores {
+				keys := s.pruneVotes()
+				for _, key := range keys {
+					p.cache.Remove(key)
+				}
 			}
+		// Ranging over the ticker alone leaked this goroutine on every stop.
+		case <-p.Quit():
+			return
 		}
 	}
 }

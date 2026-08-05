@@ -36,7 +36,7 @@ func (f *FromValidatorVerifier) initValidators(validators []*types.Validator) {
 	}
 }
 
-func (f *FromValidatorVerifier) updateValidators(changes []*types.Validator) {
+func (f *FromValidatorVerifier) updateValidators(changes []*types.Validator) error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 
@@ -46,12 +46,16 @@ func (f *FromValidatorVerifier) updateValidators(changes []*types.Validator) {
 	}
 	f.validators = make(map[string]*types.Validator)
 	valSet := &types.ValidatorSet{Validators: vals}
-	_ = valSet.UpdateWithChangeSet(changes) // use valSet's validators even if there are errors
+	// Deliberately keep whatever validators the set ended up with even on error,
+	// but surface the failure -- silently swallowing it leaves operators running
+	// a stale validator set with no signal.
+	err := valSet.UpdateWithChangeSet(changes)
 	for _, val := range valSet.Validators {
 		if len(val.BlsKey) > 0 {
 			f.validators[string(val.BlsKey[:])] = val
 		}
 	}
+	return err
 }
 
 func (f *FromValidatorVerifier) lenOfValidators() int {
