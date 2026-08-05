@@ -331,3 +331,33 @@ func TestPool_NegativeCacheSkipsRepeatBlsVerification(t *testing.T) {
 	}
 	require.NoError(t, votePool.AddVote(good), "valid signature must not be blocked by the negative cache")
 }
+
+// TestVoteStore_PruneKeepsReinsertedVote pins the defect this fix is named for.
+//
+// The same (EventHash, PubKey) can be inserted twice: once the dedup cache
+// evicts its key, a resubmission reaches addVote again, overwrites the map entry
+// and appends a SECOND queue entry. When the older queue entry expires, pruning
+// by (EventHash, PubKey) alone deleted the newer, still-live vote.
+func TestVoteStore_PruneKeepsReinsertedVote(t *testing.T) {
+	store := newVoteStore()
+
+	eventHash := common.HexToHash("0x3f2a1b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a").Bytes()
+	pubKey := make([]byte, pubKeyLen)
+
+	// First insertion, already expired.
+	stale := &Vote{PubKey: pubKey, EventType: FromBscCrossChainEvent, EventHash: eventHash}
+	stale.expireAt = time.Now().Add(-time.Minute)
+	store.addVote(stale)
+
+	// Re-insertion of the same identity while the stale queue entry is still
+	// queued -- this is what happens after a dedup-cache eviction.
+	fresh := &Vote{PubKey: pubKey, EventType: FromBscCrossChainEvent, EventHash: eventHash}
+	fresh.expireAt = time.Now().Add(time.Minute)
+	store.addVote(fresh)
+
+	store.pruneVotes()
+
+	got := store.getVotesByEventHash(eventHash)
+	require.Len(t, got, 1, "the live re-inserted vote must survive pruning of the stale entry")
+	require.Same(t, fresh, got[0], "the surviving vote must be the re-inserted one, not the expired one")
+}
