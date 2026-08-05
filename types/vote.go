@@ -79,8 +79,6 @@ type Vote struct {
 // this is left up to the caller to decide whether to call ValidateBasic or
 // ValidateWithExtension.
 func VoteFromProto(pv *cmtproto.Vote) (*Vote, error) {
-	// Synced from upstream CometBFT v0.38.x: reject a nil proto vote instead
-	// of dereferencing it.
 	if pv == nil {
 		return nil, ErrVoteNil
 	}

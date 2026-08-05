@@ -91,6 +91,20 @@ func makeBlock(state sm.State, height int64, c *types.Commit) (*types.Block, err
 	)
 }
 
+// makeBlockWithReveal is makeBlock plus a valid RANDAO reveal signed by the
+// proposer, which moca's validateBlock requires.
+func makeBlockWithReveal(state sm.State, height int64, c *types.Commit, privVals map[string]types.PrivValidator) (*types.Block, error) {
+	proposerAddr := state.Validators.GetProposer().Address
+	return state.MakeBlock(
+		height,
+		test.MakeNTxs(state.LastBlockHeight, 10),
+		c,
+		nil,
+		makeReveal(state, proposerAddr, privVals, height),
+		proposerAddr,
+	)
+}
+
 func makeValidCommit(
 	height int64,
 	blockID types.BlockID,

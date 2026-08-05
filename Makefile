@@ -13,7 +13,7 @@ GOLANGCI_LINT ?= $(GO_BIN)/golangci-lint
 GOLANGCI_LINT_VERSION ?= v1.64.8
 
 HTTPS_GIT := https://github.com/cometbft/cometbft.git
-CGO_ENABLED ?= 1
+CGO_ENABLED ?= 0
 
 # Process Docker environment varible TARGETPLATFORM
 # in order to build binary with correspondent ARCH

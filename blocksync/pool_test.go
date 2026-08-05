@@ -191,7 +191,8 @@ func TestBlockPoolTimeout(t *testing.T) {
 	// Introduce each peer.
 	go func() {
 		for _, peer := range peers {
-			pool.SetPeerRange(peer.id, peer.base, peer.height)
+			// Force uniform base so every peer contributes to maxPeerHeight at pool startup.
+			pool.SetPeerRange(peer.id, start, peer.height)
 		}
 	}()
 
@@ -320,29 +321,39 @@ func TestBlockPoolMaliciousNode(t *testing.T) {
 		for _, peer := range peers {
 			pool.SetPeerRange(peer.id, peer.base, peer.height)
 		}
+
+		ticker := time.NewTicker(1 * time.Second) // Speed of new block creation
+		defer ticker.Stop()
 		for {
-			time.Sleep(1 * time.Second) // Speed of new block creation
-			for _, peer := range peers {
-				peer.height += 1                                   // Network height increases on all peers
-				pool.SetPeerRange(peer.id, peer.base, peer.height) // Tell the pool that a new height is available
+			select {
+			case <-pool.Quit():
+				return
+			case <-ticker.C:
+				for _, peer := range peers {
+					peer.height++                                      // Network height increases on all peers
+					pool.SetPeerRange(peer.id, peer.base, peer.height) // Tell the pool that a new height is available
+				}
 			}
 		}
 	}()
 
 	// Start a goroutine to verify blocks
 	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond) // Speed of new block creation
+		defer ticker.Stop()
 		for {
-			time.Sleep(500 * time.Millisecond) // Speed of block verification
-			if !pool.IsRunning() {
+			select {
+			case <-pool.Quit():
 				return
-			}
-			first, second, _ := pool.PeekTwoBlocks()
-			if first != nil && second != nil {
-				if second.LastCommit == nil {
-					// Second block is fake
-					pool.RemovePeerAndRedoAllPeerRequests(second.Height)
-				} else {
-					pool.PopRequest()
+			case <-ticker.C:
+				first, second, _ := pool.PeekTwoBlocks()
+				if first != nil && second != nil {
+					if second.LastCommit == nil {
+						// Second block is fake
+						pool.RemovePeerAndRedoAllPeerRequests(second.Height)
+					} else {
+						pool.PopRequest()
+					}
 				}
 			}
 		}
@@ -426,7 +437,7 @@ func TestBlockPoolMaliciousNodeMaxInt64(t *testing.T) {
 		peers["bad"].height = initialHeight
 		pool.SetPeerRange(p2p.ID("bad"), 1, initialHeight)
 
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(1 * time.Second) // Speed of new block creation
 		defer ticker.Stop()
 		for {
 			select {
@@ -434,8 +445,8 @@ func TestBlockPoolMaliciousNodeMaxInt64(t *testing.T) {
 				return
 			case <-ticker.C:
 				for _, peer := range peers {
-					peer.height++
-					pool.SetPeerRange(peer.id, peer.base, peer.height)
+					peer.height++                                      // Network height increases on all peers
+					pool.SetPeerRange(peer.id, peer.base, peer.height) // Tell the pool that a new height is available
 				}
 			}
 		}
@@ -443,7 +454,7 @@ func TestBlockPoolMaliciousNodeMaxInt64(t *testing.T) {
 
 	// Start a goroutine to verify blocks
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
+		ticker := time.NewTicker(500 * time.Millisecond) // Speed of new block creation
 		defer ticker.Stop()
 		for {
 			select {
@@ -453,6 +464,7 @@ func TestBlockPoolMaliciousNodeMaxInt64(t *testing.T) {
 				first, second, _ := pool.PeekTwoBlocks()
 				if first != nil && second != nil {
 					if second.LastCommit == nil {
+						// Second block is fake
 						pool.RemovePeerAndRedoAllPeerRequests(second.Height)
 					} else {
 						pool.PopRequest()
@@ -462,32 +474,36 @@ func TestBlockPoolMaliciousNodeMaxInt64(t *testing.T) {
 		}
 	}()
 
-	testTicker := time.NewTicker(200 * time.Millisecond)
+	testTicker := time.NewTicker(200 * time.Millisecond) // speed of test execution
 	t.Cleanup(func() { testTicker.Stop() })
 
-	bannedOnce := false
+	bannedOnce := false // true when the malicious peer was banned at least once
 	startTime := time.Now()
 
 	// Pull from channels
 	for {
 		select {
 		case err := <-errorsCh:
-			if err.peerID == "bad" {
+			if err.peerID == "bad" { // ignore errors from the malicious peer
 				t.Log(err)
 			} else {
 				t.Error(err)
 			}
 		case request := <-requestsCh:
+			// Process request
 			peers[request.PeerID].inputChan <- inputData{t, pool, request}
 		case <-testTicker.C:
 			banned := pool.IsPeerBanned("bad")
-			bannedOnce = bannedOnce || banned
+			bannedOnce = bannedOnce || banned // Keep bannedOnce true, even if the malicious peer gets unbanned
 			caughtUp := pool.IsCaughtUp()
+			// Success: pool caught up and malicious peer was banned at least once
 			if caughtUp && bannedOnce {
 				t.Logf("Pool caught up, malicious peer was banned at least once, start consensus.")
 				return
 			}
+			// Failure: the pool caught up without banning the bad peer at least once
 			require.False(t, caughtUp, "Network caught up without banning the malicious peer at least once.")
+			// Failure: the network could not catch up in the allotted time
 			require.True(t, time.Since(startTime) < MaliciousTestMaximumLength, "Network ran too long, stopping test.")
 		}
 	}
@@ -495,7 +511,6 @@ func TestBlockPoolMaliciousNodeMaxInt64(t *testing.T) {
 
 // TestBlockPoolBansPeerWithBaseGreaterThanHeight verifies that a peer whose self-reported base
 // exceeds its own height (a structurally impossible state) is banned.
-// Synced from upstream CometBFT v0.38.x — exercises the SetPeerRange `base > height` ban.
 func TestBlockPoolBansPeerWithBaseGreaterThanHeight(t *testing.T) {
 	requestsCh := make(chan BlockRequest, 10)
 	errorsCh := make(chan peerError, 10)
@@ -513,8 +528,6 @@ func TestBlockPoolBansPeerWithBaseGreaterThanHeight(t *testing.T) {
 // TestBlockPoolMaxPeerHeightRefreshesOnPopRequest covers:
 //  1. A peer whose base is ahead of pool.height must not contribute to maxPeerHeight
 //  2. When pool.height advances past a pruned peer's base, maxPeerHeight is re-evaluated.
-//
-// Synced from upstream CometBFT v0.38.x.
 func TestBlockPoolMaxPeerHeightRefreshesOnPopRequest(t *testing.T) {
 	requestsCh := make(chan BlockRequest, 10)
 	errorsCh := make(chan peerError, 10)
@@ -544,4 +557,53 @@ func TestBlockPoolMaxPeerHeightRefreshesOnPopRequest(t *testing.T) {
 	// maxPeerHeight to its advertised height without B re-sending status.
 	require.EqualValues(t, 100, pool.MaxPeerHeight(),
 		"peer B must contribute to maxPeerHeight once pool.height reaches its base")
+}
+
+func TestBlockPoolHasPendingRequestFrom(t *testing.T) {
+	requestsCh := make(chan BlockRequest, 10)
+	errorsCh := make(chan peerError, 10)
+
+	pool := NewBlockPool(1, requestsCh, errorsCh)
+	pool.SetLogger(log.TestingLogger())
+
+	const (
+		primary   = p2p.ID("primary")
+		secondary = p2p.ID("secondary")
+		stranger  = p2p.ID("stranger")
+	)
+
+	// check initial state
+	require.False(t, pool.HasPendingRequestFrom(primary))
+	require.False(t, pool.HasPendingRequestFrom(secondary))
+	require.False(t, pool.HasPendingRequestFrom(stranger))
+
+	// Install a requester for height 1 targeting `primary`. We set the
+	// fields directly so we don't have to spin up the request goroutine.
+	pool.mtx.Lock()
+	req1 := newBPRequester(pool, 1)
+	req1.peerID = primary
+	pool.requesters[1] = req1
+	pool.mtx.Unlock()
+
+	require.True(t, pool.HasPendingRequestFrom(primary), "requested peer should be reported as pending")
+	require.False(t, pool.HasPendingRequestFrom(stranger), "non-requested peer must not be reported as pending")
+
+	// A second requester at height 2 also covers the secondPeerID slot.
+	pool.mtx.Lock()
+	req2 := newBPRequester(pool, 2)
+	req2.peerID = primary
+	req2.secondPeerID = secondary
+	pool.requesters[2] = req2
+	pool.mtx.Unlock()
+
+	require.True(t, pool.HasPendingRequestFrom(secondary), "secondary peer slot should count as pending")
+
+	// Removing both requesters drops the pending state.
+	pool.mtx.Lock()
+	delete(pool.requesters, 1)
+	delete(pool.requesters, 2)
+	pool.mtx.Unlock()
+
+	require.False(t, pool.HasPendingRequestFrom(primary))
+	require.False(t, pool.HasPendingRequestFrom(secondary))
 }

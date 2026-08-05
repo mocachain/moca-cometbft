@@ -254,16 +254,26 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 	// Evidence should be submitted and committed at the third height but
 	// we will check the first six just in case
 	evidenceFromEachValidator := make([]types.Evidence, nValidators)
+	subErrCh := make(chan error, nValidators)
 
 	wg := new(sync.WaitGroup)
 	for i := 0; i < nValidators; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			for msg := range blocksSubs[i].Out() {
-				block := msg.Data().(types.EventDataNewBlock).Block
-				if len(block.Evidence.Evidence) != 0 {
-					evidenceFromEachValidator[i] = block.Evidence.Evidence[0]
+			sub := blocksSubs[i]
+			for {
+				select {
+				case msg := <-sub.Out():
+					block := msg.Data().(types.EventDataNewBlock).Block
+					if len(block.Evidence.Evidence) != 0 {
+						evidenceFromEachValidator[i] = block.Evidence.Evidence[0]
+						return
+					}
+				case <-sub.Canceled():
+					if err := sub.Err(); err != nil {
+						subErrCh <- err
+					}
 					return
 				}
 			}
@@ -281,6 +291,11 @@ func TestByzantinePrevoteEquivocation(t *testing.T) {
 
 	select {
 	case <-done:
+		select {
+		case err := <-subErrCh:
+			t.Fatalf("subscription unexpectedly canceled: %v", err)
+		default:
+		}
 		for idx, ev := range evidenceFromEachValidator {
 			if assert.NotNil(t, ev, idx) {
 				ev, ok := ev.(*types.DuplicateVoteEvidence)
@@ -595,4 +610,88 @@ func (br *ByzantineReactor) RemovePeer(peer p2p.Peer, reason interface{}) {
 func (br *ByzantineReactor) Receive(e p2p.Envelope) {
 	br.reactor.Receive(e)
 }
+
 func (br *ByzantineReactor) InitPeer(peer p2p.Peer) p2p.Peer { return peer }
+
+// Large/oversized proposals should be rejected
+func TestRejectOversizedProposals(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	n := 2
+	css, cleanup := randConsensusNet(t, n, "consensus_reactor_test", newMockTickerFunc(false), newKVStore)
+	defer cleanup()
+
+	switches := make([]*p2p.Switch, n)
+	p2pLogger := consensusLogger().With("module", "p2p")
+	for i := 0; i < n; i++ {
+		switches[i] = p2p.MakeSwitch(
+			config.P2P,
+			i,
+			func(_ int, sw *p2p.Switch) *p2p.Switch {
+				return sw
+			})
+		switches[i].SetLogger(p2pLogger.With("validator", i))
+	}
+
+	reactors := make([]p2p.Reactor, n)
+	for i := 0; i < n; i++ {
+		conR := NewReactor(css[i], false)
+		defer func() { require.NoError(t, conR.Stop()) }()
+
+		conR.SetLogger(consensusLogger().With("validator", i))
+		reactors[i] = conR
+	}
+
+	p2p.MakeConnectedSwitches(config.P2P, n, func(i int, _ *p2p.Switch) *p2p.Switch {
+		switches[i].AddReactor("CONSENSUS", reactors[i])
+		return switches[i]
+	}, p2p.Connect2Switches)
+
+	peers := switches[0].Peers().List()
+	targetPeer := peers[0]
+
+	height := int64(1)
+	round := int32(0)
+	cs := css[0]
+
+	block, err := cs.createProposalBlock(ctx)
+	require.NoError(t, err)
+
+	blockParts, err := block.MakePartSet(types.BlockPartSizeBytes)
+	require.NoError(t, err)
+
+	// create oversized proposal
+	propBlockID := types.BlockID{Hash: block.Hash(), PartSetHeader: blockParts.Header()}
+	propBlockID.PartSetHeader.Total = 4294967295
+
+	proposal := types.NewProposal(height, round, -1, propBlockID)
+	p := proposal.ToProto()
+	if err := cs.privValidator.SignProposal(cs.state.ChainID, p); err != nil {
+		t.Error(err)
+	}
+	proposal.Signature = p.Signature
+
+	success := targetPeer.Send(p2p.Envelope{
+		ChannelID: DataChannel,
+		Message:   &cmtcons.Proposal{Proposal: *proposal.ToProto()},
+	})
+	require.True(t, success)
+
+	select {
+	case e := <-css[1].peerMsgQueue:
+		// if we receive a message here, the peer incorrectly accepted the
+		// oversized proposal
+		if _, receivedProposal := e.Msg.(*ProposalMessage); receivedProposal {
+			assert.Fail(t, "peer incorrectly accepted oversized proposal")
+			return
+		}
+		// invalid state, we received some other unexpected message type, fail
+		// the test
+		assert.Fail(t, "received unexpected message type on peer msg queue, expected *ProposalMessage")
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		// timeout after 500ms if nothing has happened and assume peer rejected
+		// the proposal
+	}
+}

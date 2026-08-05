@@ -13,6 +13,7 @@ import (
 
 	"github.com/cometbft/cometbft/evidence"
 	"github.com/cometbft/cometbft/evidence/mocks"
+	"github.com/cometbft/cometbft/internal/test"
 	"github.com/cometbft/cometbft/libs/log"
 	cmtversion "github.com/cometbft/cometbft/proto/tendermint/version"
 	sm "github.com/cometbft/cometbft/state"
@@ -131,7 +132,7 @@ func TestAddExpiredEvidence(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
+
 		t.Run(tc.evDescription, func(t *testing.T) {
 			ev, err := types.NewMockDuplicateVoteEvidenceWithValidator(tc.evHeight, tc.evTime, val, evidenceChainID)
 			require.NoError(t, err)
@@ -412,13 +413,12 @@ func initializeBlockStore(db dbm.DB, state sm.State, valAddr []byte) (*store.Blo
 
 	for i := int64(1); i <= state.LastBlockHeight; i++ {
 		lastCommit := makeExtCommit(i-1, valAddr)
-		block, err := state.MakeBlock(i, []types.Tx{}, lastCommit.ToCommit(), nil, nil,
-			state.Validators.GetProposer().Address)
+		block, err := state.MakeBlock(i, test.MakeNTxs(i, 1), lastCommit.ToCommit(), nil, nil, state.Validators.Proposer.Address)
 		if err != nil {
 			return nil, err
 		}
-		block.Header.Time = defaultEvidenceTime.Add(time.Duration(i) * time.Minute)
-		block.Header.Version = cmtversion.Consensus{Block: version.BlockProtocol, App: 1}
+		block.Time = defaultEvidenceTime.Add(time.Duration(i) * time.Minute)
+		block.Version = cmtversion.Consensus{Block: version.BlockProtocol, App: 1}
 		partSet, err := block.MakePartSet(types.BlockPartSizeBytes)
 		if err != nil {
 			return nil, err

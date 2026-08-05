@@ -163,9 +163,7 @@ func (s *SocketServer) waitForClose(closeConn chan error, connID int) {
 func (s *SocketServer) handleRequests(closeConn chan error, conn io.Reader, responses chan<- *types.Response) {
 	var bufReader = bufio.NewReader(conn)
 
-	// Synced from upstream CometBFT v0.38.x: track whether appMtx is held so
-	// the panic-recovery defer does not unlock a mutex that was never locked.
-	locked := false
+	locked := false // true only while appMtx is held inside the loop
 
 	defer func() {
 		// make sure to recover from any app-related panics to allow proper socket cleanup.

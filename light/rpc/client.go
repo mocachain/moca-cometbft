@@ -8,7 +8,6 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/cometbft/cometbft/votepool"
 	"github.com/cometbft/cometbft/crypto/merkle"
 	cmtbytes "github.com/cometbft/cometbft/libs/bytes"
 	cmtmath "github.com/cometbft/cometbft/libs/math"
@@ -18,6 +17,7 @@ import (
 	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
 	"github.com/cometbft/cometbft/state"
 	"github.com/cometbft/cometbft/types"
+	"github.com/cometbft/cometbft/votepool"
 )
 
 var errNegOrZeroHeight = errors.New("negative or zero height")
@@ -448,9 +448,9 @@ func (c *Client) HeaderByHash(ctx context.Context, hash cmtbytes.HexBytes) (*cty
 		return nil, err
 	}
 
-	if !bytes.Equal(lb.Header.Hash(), res.Header.Hash()) {
+	if !bytes.Equal(lb.Hash(), res.Header.Hash()) {
 		return nil, fmt.Errorf("primary header hash does not match trusted header hash. (%X != %X)",
-			lb.Header.Hash(), res.Header.Hash())
+			lb.Hash(), res.Header.Hash())
 	}
 
 	return res, nil

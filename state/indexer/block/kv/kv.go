@@ -333,10 +333,8 @@ LOOP:
 			}
 			if err != nil {
 				idx.log.Error("failed to parse bounds:", err)
-			} else {
-				if withinBounds {
-					idx.setTmpHeights(tmpHeights, it)
-				}
+			} else if withinBounds {
+				idx.setTmpHeights(tmpHeights, it)
 			}
 		}
 
@@ -389,12 +387,12 @@ func (idx *BlockerIndexer) setTmpHeights(tmpHeights map[string][]byte, it dbm.It
 	// event sequence in the result map as well.
 	eventSeq, _ := parseEventSeqFromEventKey(it.Key())
 
-	// Synced from upstream CometBFT v0.38.x: copy the value because the
-	// iterator reuses its buffer, which otherwise drops block_search results.
+	// Copy the value because the iterator will be reused.
 	value := make([]byte, len(it.Value()))
 	copy(value, it.Value())
 
 	tmpHeights[string(value)+strconv.FormatInt(eventSeq, 10)] = value
+
 }
 
 // match returns all matching heights that meet a given query condition and start
@@ -419,8 +417,8 @@ func (idx *BlockerIndexer) match(
 
 	tmpHeights := make(map[string][]byte)
 
-	switch {
-	case c.Op == syntax.TEq:
+	switch c.Op {
+	case syntax.TEq:
 		it, err := dbm.IteratePrefix(idx.store, startKeyBz)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create prefix iterator: %w", err)
@@ -454,7 +452,7 @@ func (idx *BlockerIndexer) match(
 			return nil, err
 		}
 
-	case c.Op == syntax.TExists:
+	case syntax.TExists:
 		prefix, err := orderedcode.Append(nil, c.Tag)
 		if err != nil {
 			return nil, err
@@ -497,7 +495,7 @@ func (idx *BlockerIndexer) match(
 			return nil, err
 		}
 
-	case c.Op == syntax.TContains:
+	case syntax.TContains:
 		prefix, err := orderedcode.Append(nil, c.Tag)
 		if err != nil {
 			return nil, err
@@ -583,7 +581,7 @@ func (idx *BlockerIndexer) indexEvents(batch dbm.Batch, events []abci.Event, hei
 	heightBz := int64ToBytes(height)
 
 	for _, event := range events {
-		idx.eventSeq = idx.eventSeq + 1
+		idx.eventSeq++
 		// only index events with a non-empty type
 		if len(event.Type) == 0 {
 			continue

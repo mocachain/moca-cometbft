@@ -312,7 +312,6 @@ func (vals *ValidatorSet) Size() int {
 
 // Forces recalculation of the set's total voting power.
 // Returns an error if total voting power exceeds MaxTotalVotingPower.
-// Synced from upstream CometBFT v0.38.x: returns an error instead of panicking.
 func (vals *ValidatorSet) updateTotalVotingPower() error {
 	sum := int64(0)
 	for _, val := range vals.Validators {
@@ -329,7 +328,6 @@ func (vals *ValidatorSet) updateTotalVotingPower() error {
 
 // TotalVotingPowerSafe returns the sum of the voting powers of all validators,
 // or an error if the total exceeds MaxTotalVotingPower.
-// Synced from upstream CometBFT v0.38.x.
 func (vals *ValidatorSet) TotalVotingPowerSafe() (int64, error) {
 	if vals.totalVotingPower == 0 {
 		if err := vals.updateTotalVotingPower(); err != nil {
@@ -679,7 +677,7 @@ func (vals *ValidatorSet) updateWithChangeSet(changes []*Validator, allowDeletes
 	// Should go after additions.
 	vals.checkAllKeysHaveSameType()
 
-	if err := vals.updateTotalVotingPower(); err != nil {
+	if err = vals.updateTotalVotingPower(); err != nil {
 		panic(err)
 	}
 
@@ -739,6 +737,48 @@ func (vals *ValidatorSet) VerifyRandao(chainID string, lastRandaoMix []byte, hei
 	binary.BigEndian.PutUint64(heightBytes, uint64(height))
 	if !proposer.PubKey.VerifySignature(append(chainIDBytes, heightBytes...), randaoReveal) {
 		return fmt.Errorf("wrong randao reveal, proposer: %s, reveal: %X, len: %d, height: %d", proposer.Address, randaoReveal, len(randaoReveal), height)
+	}
+
+	return nil
+}
+
+// VerifyCommitExtended similar to VerifyCommit but for extended commits.
+// extCommit must already be validated by ValidateBasic.
+func (vals *ValidatorSet) VerifyCommitExtended(
+	chainID string,
+	blockID BlockID,
+	height int64,
+	extCommit *ExtendedCommit,
+) error {
+	if extCommit == nil {
+		return errors.New("nil extended commit")
+	}
+
+	// 1. ensure vote extensions
+	err := extCommit.EnsureExtensions(true)
+	if err != nil {
+		return err
+	}
+
+	// 2. verify regular commit
+	err = vals.VerifyCommit(chainID, blockID, height, extCommit.ToCommit())
+	if err != nil {
+		return err
+	}
+
+	// 3. check signatures
+	for idx := range extCommit.ExtendedSignatures {
+		_, val := vals.GetByIndex(int32(idx))
+
+		// should not happen as we verified the commit above
+		if val == nil {
+			return fmt.Errorf("unable to find val #%d out of %d vals", idx, vals.Size())
+		}
+
+		vote := extCommit.GetExtendedVote(int32(idx))
+		if err := vote.VerifyExtension(chainID, val.PubKey); err != nil {
+			return fmt.Errorf("invalid vote extension signature (val #%d): %w", idx, err)
+		}
 	}
 
 	return nil
@@ -978,7 +1018,7 @@ func ValidatorSetFromProto(vp *cmtproto.ValidatorSet) (*ValidatorSet, error) {
 	// power hence we need to recompute it.
 	// FIXME: We should look to remove TotalVotingPower from proto or add it in the validators hash
 	// so we don't have to do this
-	// NOTE: Use TotalVotingPowerSafe to return an error instead of panicking on invalid input.
+	// NOTE: Use TotalVotingPowerSafe to return error instead of panicking on invalid input.
 	if _, err := vals.TotalVotingPowerSafe(); err != nil {
 		return nil, err
 	}

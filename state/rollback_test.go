@@ -127,7 +127,7 @@ func TestRollbackHard(t *testing.T) {
 
 	currState := state.State{
 		Version: cmtstate.Version{
-			Consensus: block.Header.Version,
+			Consensus: block.Version,
 			Software:  version.TMCoreSemVer,
 		},
 		LastBlockHeight:                  block.Height,
@@ -184,7 +184,7 @@ func TestRollbackHard(t *testing.T) {
 
 	nextState := state.State{
 		Version: cmtstate.Version{
-			Consensus: block.Header.Version,
+			Consensus: block.Version,
 			Software:  version.TMCoreSemVer,
 		},
 		LastBlockHeight:                  nextBlock.Height,
@@ -280,8 +280,8 @@ func makeBlockIDRandom() types.BlockID {
 		blockHash   = make([]byte, tmhash.Size)
 		partSetHash = make([]byte, tmhash.Size)
 	)
-	rand.Read(blockHash)   //nolint: errcheck // ignore errcheck for read
-	rand.Read(partSetHash) //nolint: errcheck // ignore errcheck for read
+	_, _ = rand.Read(blockHash)
+	_, _ = rand.Read(partSetHash)
 	return types.BlockID{
 		Hash: blockHash,
 		PartSetHeader: types.PartSetHeader{

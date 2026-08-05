@@ -199,6 +199,19 @@ func (pool *BlockPool) GetStatus() (height int64, numPending int32, lenRequester
 	return pool.height, atomic.LoadInt32(&pool.numPending), len(pool.requesters)
 }
 
+// HasPendingRequestFrom reports whether we have at least one outstanding block
+// request directed at the given peer.
+func (pool *BlockPool) HasPendingRequestFrom(peerID p2p.ID) bool {
+	pool.mtx.Lock()
+	defer pool.mtx.Unlock()
+	for _, r := range pool.requesters {
+		if r.didRequestFrom(peerID) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsCaughtUp returns true if this node is caught up, false - otherwise.
 // TODO: relax conditions, prevent abuse.
 func (pool *BlockPool) IsCaughtUp() bool {
@@ -259,9 +272,7 @@ func (pool *BlockPool) PopRequest() {
 	delete(pool.requesters, pool.height)
 	pool.height++
 
-	// Synced from upstream CometBFT v0.38.x: re-evaluate maxPeerHeight, since
-	// peers whose pruned base was just beyond the previous pool.height may now
-	// be able to contribute.
+	// Re-evaluate maxPeerHeight: peers whose pruned base was just beyond the previous pool.height may now be able to contribute
 	pool.updateMaxPeerHeight()
 
 	// Notify the next minBlocksForSingleRequest requesters about new height, so
@@ -369,8 +380,7 @@ func (pool *BlockPool) SetPeerRange(peerID p2p.ID, base int64, height int64) {
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 
-	// Synced from upstream CometBFT v0.38.x: a peer reporting a base greater
-	// than its own height is structurally impossible; treat it as malicious.
+	// A peer whose own reported base exceeds its own height is structurally impossible and treated as malicious.
 	if base > height {
 		pool.Logger.Info("Peer reporting base greater than height", "peer", peerID, "base", base, "height", height)
 		if _, exists := pool.peers[peerID]; exists {
@@ -419,6 +429,7 @@ func (pool *BlockPool) RemovePeer(peerID p2p.ID) {
 	pool.removePeer(peerID)
 }
 
+// CONTRACT: pool.mtx must be locked.
 func (pool *BlockPool) removePeer(peerID p2p.ID) {
 	for _, requester := range pool.requesters {
 		if requester.didRequestFrom(peerID) {
@@ -449,15 +460,13 @@ func (pool *BlockPool) removePeer(peerID p2p.ID) {
 }
 
 // updateMaxPeerHeight sets maxPeerHeight to the highest height among peers.
-// If no peers are left, maxPeerHeight is set to 0.
 func (pool *BlockPool) updateMaxPeerHeight() {
 	var max int64
 	for _, peer := range pool.peers {
-		// Synced from upstream CometBFT v0.38.x: skip peers whose reported base
-		// is beyond our current height. They cannot serve the blocks we need,
-		// and an inflated base/height pair would otherwise poison maxPeerHeight
-		// and stall IsCaughtUp forever.
 		if pool.height > 0 && peer.base > pool.height {
+			// Blocks a malicious peer from poisoning maxPeerHeight with an
+			// inflated base/height pair no peer can actually serve, which
+			// would stall IsCaughtUp forever.
 			continue
 		}
 		if peer.height > max {
@@ -467,20 +476,20 @@ func (pool *BlockPool) updateMaxPeerHeight() {
 	pool.maxPeerHeight = max
 }
 
-// IsPeerBanned reports whether the peer is currently banned. It acquires
-// pool.mtx and is the safe entry point for callers that do not already hold it
-// (e.g. tests, external callers). Ported from upstream CometBFT v0.38.x.
+// IsPeerBanned returns true if the peer is banned.
 func (pool *BlockPool) IsPeerBanned(peerID p2p.ID) bool {
 	pool.mtx.Lock()
 	defer pool.mtx.Unlock()
 	return pool.isPeerBanned(peerID)
 }
 
+// CONTRACT: pool.mtx must be locked.
 func (pool *BlockPool) isPeerBanned(peerID p2p.ID) bool {
 	// Todo: replace with cmttime.Since in future versions
 	return time.Since(pool.bannedPeers[peerID]) < time.Second*60
 }
 
+// CONTRACT: pool.mtx must be locked.
 func (pool *BlockPool) banPeer(peerID p2p.ID) {
 	pool.Logger.Debug("Banning peer", peerID)
 	pool.bannedPeers[peerID] = cmttime.Now()

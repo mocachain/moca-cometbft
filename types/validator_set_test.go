@@ -8,12 +8,14 @@ import (
 	"strings"
 	"testing"
 	"testing/quick"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/cometbft/cometbft/crypto"
 	"github.com/cometbft/cometbft/crypto/ed25519"
+	cryptoenc "github.com/cometbft/cometbft/crypto/encoding"
 	"github.com/cometbft/cometbft/crypto/sr25519"
 	cmtmath "github.com/cometbft/cometbft/libs/math"
 	cmtrand "github.com/cometbft/cometbft/libs/rand"
@@ -471,6 +473,25 @@ func TestValidatorSetTotalVotingPowerPanicsOnOverflow(t *testing.T) {
 	assert.Panics(t, shouldPanic)
 }
 
+func TestValidatorSetFromProtoReturnsErrorOnOverflow(t *testing.T) {
+	// ValidatorSetFromProto should return an error instead of panicking when total voting power exceeds MaxTotalVotingPower.
+	pubKey := ed25519.GenPrivKey().PubKey()
+	pkProto, err := cryptoenc.PubKeyToProto(pubKey)
+	require.NoError(t, err)
+
+	protoVals := &cmtproto.ValidatorSet{
+		Validators: []*cmtproto.Validator{
+			{Address: pubKey.Address(), PubKey: pkProto, VotingPower: math.MaxInt64, ProposerPriority: 0},
+			{Address: pubKey.Address(), PubKey: pkProto, VotingPower: math.MaxInt64, ProposerPriority: 0},
+		},
+		Proposer: &cmtproto.Validator{Address: pubKey.Address(), PubKey: pkProto, VotingPower: math.MaxInt64, ProposerPriority: 0},
+	}
+
+	_, err = ValidatorSetFromProto(protoVals)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum")
+}
+
 func TestAvgProposerPriority(t *testing.T) {
 	// Create Validator set without calling IncrementProposerPriority:
 	tcs := []struct {
@@ -832,7 +853,8 @@ func verifyValidatorSet(t *testing.T, valSet *ValidatorSet) {
 
 	// verify that the set's total voting power has been updated
 	tvp := valSet.totalVotingPower
-	require.NoError(t, valSet.updateTotalVotingPower())
+	err := valSet.updateTotalVotingPower()
+	require.NoError(t, err)
 	expectedTvp := valSet.TotalVotingPower()
 	assert.Equal(t, expectedTvp, tvp,
 		"expected TVP %d. Got %d, valSet=%s", expectedTvp, tvp, valSet)
@@ -1457,7 +1479,7 @@ func TestValSetUpdateOverflowRelated(t *testing.T) {
 	}
 
 	for _, tt := range testCases {
-		tt := tt
+
 		t.Run(tt.name, func(t *testing.T) {
 			valSet := createNewValidatorSet(tt.startVals)
 			verifyValidatorSet(t, valSet)
@@ -1655,6 +1677,99 @@ func TestVerifyCommitWithInvalidProposerKey(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestVerifyCommitExtended(t *testing.T) {
+	const (
+		chainID = "test_chain_id"
+		height  = int64(3)
+		round   = int32(1)
+	)
+	t.Run("happy path", func(t *testing.T) {
+		// ARRANGE
+		blockID := makeBlockIDRandom()
+		voteSet, valSet, vals := randVoteSet(height, round, cmtproto.PrecommitType, 4, 10, true)
+		extCommit, err := MakeExtCommit(blockID, height, round, voteSet, vals, time.Now(), true)
+		require.NoError(t, err)
+
+		// ACT
+		err = valSet.VerifyCommitExtended(chainID, blockID, height, extCommit)
+
+		// ASSERT
+		require.NoError(t, err)
+	})
+
+	t.Run("invalid signature", func(t *testing.T) {
+		// ARRANGE
+		blockID := makeBlockIDRandom()
+		voteSet, valSet, vals := randVoteSet(height, round, cmtproto.PrecommitType, 4, 10, true)
+		extCommit, err := MakeExtCommit(blockID, height, round, voteSet, vals, time.Now(), true)
+		require.NoError(t, err)
+		require.NotEmpty(t, extCommit.ExtendedSignatures[1].ExtensionSignature)
+		extCommit.ExtendedSignatures[1].ExtensionSignature = []byte("invalid")
+
+		// ACT
+		err = valSet.VerifyCommitExtended(chainID, blockID, height, extCommit)
+
+		// ASSERT
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid vote extension signature (val #1)")
+	})
+
+	t.Run("nil extended commit", func(t *testing.T) {
+		// ACT
+		err := (&ValidatorSet{}).VerifyCommitExtended(chainID, makeBlockIDRandom(), height, nil)
+
+		// ASSERT
+		require.Error(t, err)
+		assert.Equal(t, "nil extended commit", err.Error())
+	})
+
+	t.Run("allows absent and nil votes in extended commit", func(t *testing.T) {
+		// ARRANGE
+		blockID := makeBlockIDRandom()
+		voteSet, valSet, vals := randVoteSet(height, round, cmtproto.PrecommitType, 7, 10, true)
+		now := time.Now()
+
+		for i := 0; i < 5; i++ {
+			pubKey, err := vals[i].GetPubKey()
+			require.NoError(t, err)
+
+			vote := &Vote{
+				ValidatorAddress: pubKey.Address(),
+				ValidatorIndex:   int32(i),
+				Height:           height,
+				Round:            round,
+				Type:             cmtproto.PrecommitType,
+				BlockID:          blockID,
+				Timestamp:        now,
+			}
+
+			added, err := signAddVote(vals[i], vote, voteSet)
+			require.NoError(t, err)
+			require.True(t, added)
+		}
+
+		nilVote, err := MakeVote(vals[5], chainID, 5, height, round, cmtproto.PrecommitType, BlockID{}, now)
+		require.NoError(t, err)
+		added, err := voteSet.AddVote(nilVote)
+		require.NoError(t, err)
+		require.True(t, added)
+
+		extCommit := voteSet.MakeExtendedCommit(ABCIParams{VoteExtensionsEnableHeight: height})
+		require.Equal(t, BlockIDFlagNil, extCommit.ExtendedSignatures[5].BlockIDFlag)
+		require.Equal(t, BlockIDFlagAbsent, extCommit.ExtendedSignatures[6].BlockIDFlag)
+		require.Empty(t, extCommit.ExtendedSignatures[5].Extension)
+		require.Empty(t, extCommit.ExtendedSignatures[5].ExtensionSignature)
+		require.Empty(t, extCommit.ExtendedSignatures[6].Extension)
+		require.Empty(t, extCommit.ExtendedSignatures[6].ExtensionSignature)
+
+		// ACT
+		err = valSet.VerifyCommitExtended(chainID, blockID, height, extCommit)
+
+		// ASSERT
+		require.NoError(t, err)
+	})
+}
+
 func TestVerifyCommitSingleWithInvalidSignatures(t *testing.T) {
 	vs := &ValidatorSet{
 		Validators: []*Validator{{}, {}},
@@ -1705,5 +1820,143 @@ func TestValidatorSet_AllKeysHaveSameType(t *testing.T) {
 		} else {
 			assert.False(t, tc.vals.AllKeysHaveSameType(), "test %d", i)
 		}
+	}
+}
+
+func TestValidatorSet_TotalVotingPowerSafe(t *testing.T) {
+	testCases := []struct {
+		name          string
+		validators    []*Validator
+		expectedPower int64
+		expectError   bool
+		errorContains string
+	}{
+		{
+			name: "happy path - normal validators",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), 100),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 200),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 300),
+			},
+			expectedPower: 600,
+			expectError:   false,
+		},
+		{
+			name:          "zero state - empty validator set",
+			validators:    []*Validator{},
+			expectedPower: 0,
+			expectError:   false,
+		},
+		{
+			name:          "zero state - nil validator set",
+			validators:    nil,
+			expectedPower: 0,
+			expectError:   false,
+		},
+		{
+			name: "single validator",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), 1000),
+			},
+			expectedPower: 1000,
+			expectError:   false,
+		},
+		{
+			name: "boundary - exactly at MaxTotalVotingPower",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), MaxTotalVotingPower),
+			},
+			expectedPower: MaxTotalVotingPower,
+			expectError:   false,
+		},
+		{
+			name: "boundary - sum equals MaxTotalVotingPower",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), MaxTotalVotingPower-100),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 100),
+			},
+			expectedPower: MaxTotalVotingPower,
+			expectError:   false,
+		},
+		{
+			name: "overflow - exceeds MaxTotalVotingPower",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), MaxTotalVotingPower/2+1),
+				NewValidator(ed25519.GenPrivKey().PubKey(), MaxTotalVotingPower/2+1),
+			},
+			expectedPower: 0,
+			expectError:   true,
+			errorContains: "exceeds maximum",
+		},
+		{
+			name: "overflow - multiple validators exceeding MaxTotalVotingPower",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), MaxTotalVotingPower),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 1),
+			},
+			expectedPower: 0,
+			expectError:   true,
+			errorContains: "exceeds maximum",
+		},
+		{
+			name: "overflow - three large validators",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), math.MaxInt64/2),
+				NewValidator(ed25519.GenPrivKey().PubKey(), math.MaxInt64/2),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 100),
+			},
+			expectedPower: 0,
+			expectError:   true,
+			errorContains: "exceeds maximum",
+		},
+		{
+			name: "validators with zero voting power",
+			validators: []*Validator{
+				NewValidator(ed25519.GenPrivKey().PubKey(), 100),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 0),
+				NewValidator(ed25519.GenPrivKey().PubKey(), 200),
+			},
+			expectedPower: 300,
+			expectError:   false,
+		},
+		{
+			name: "large number of validators - within limit",
+			validators: func() []*Validator {
+				vals := make([]*Validator, 100)
+				for i := 0; i < 100; i++ {
+					vals[i] = NewValidator(ed25519.GenPrivKey().PubKey(), 1000)
+				}
+				return vals
+			}(),
+			expectedPower: 100000,
+			expectError:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create validator set without using NewValidatorSet to avoid panic on overflow
+			valSet := &ValidatorSet{
+				Validators: tc.validators,
+			}
+
+			// Call TotalVotingPowerSafe
+			totalPower, err := valSet.TotalVotingPowerSafe()
+
+			// Assert expectations
+			if tc.expectError {
+				require.Error(t, err, "expected error but got none")
+				if tc.errorContains != "" {
+					require.Contains(t, err.Error(), tc.errorContains,
+						"error message should contain expected text")
+				}
+				require.Equal(t, tc.expectedPower, totalPower,
+					"power should be %d when error occurs", tc.expectedPower)
+			} else {
+				require.NoError(t, err, "unexpected error: %v", err)
+				require.Equal(t, tc.expectedPower, totalPower,
+					"total voting power should be %d", tc.expectedPower)
+			}
+		})
 	}
 }
