@@ -1088,3 +1088,40 @@ func doUpdate(tb testing.TB, mp Mempool, height int64, txs []types.Tx) {
 	require.NoError(tb, err)
 	mp.Unlock()
 }
+
+// TestCheckTxReturnsErrorInsteadOfPanickingOnABCIError pins that a failing ABCI
+// CheckTxAsync surfaces as an error from CheckTx rather than killing the node,
+// and that the transaction is evicted from the cache so it stays retryable.
+//
+// A genuinely dead application is still handled -- proxy.multiAppConn runs
+// killTMOnClientError, which stops the process with an operator-facing message.
+// Panicking here as well only converted recoverable proxy errors into crashes.
+func TestCheckTxReturnsErrorInsteadOfPanickingOnABCIError(t *testing.T) {
+	mockClient := new(abciclimocks.Client)
+	mockClient.On("Start").Return(nil)
+	mockClient.On("SetLogger", mock.Anything)
+	mockClient.On("Error").Return(nil)
+	mockClient.On("SetResponseCallback", mock.Anything)
+	mockClient.On("Flush", mock.Anything).Return(nil)
+
+	mp, cleanup, err := newMempoolWithAppMock(mockClient)
+	require.NoError(t, err)
+	defer cleanup()
+
+	abciErr := errors.New("abci connection is down")
+	mockClient.On("CheckTxAsync", mock.Anything, mock.Anything).Return(nil, abciErr)
+
+	tx := types.Tx{0x01}
+	require.NotPanics(t, func() {
+		err = mp.CheckTx(tx, nil, TxInfo{})
+	}, "an ABCI error must not bring the node down from inside the mempool")
+	require.ErrorIs(t, err, abciErr, "the ABCI error must be surfaced to the caller")
+
+	// The tx was pushed into the cache before the failed request; if it were left
+	// there, every resubmission would be silently rejected as a duplicate once the
+	// application recovered.
+	require.NotPanics(t, func() {
+		err = mp.CheckTx(tx, nil, TxInfo{})
+	})
+	require.ErrorIs(t, err, abciErr, "tx must remain retryable, not be swallowed as ErrTxInCache")
+}

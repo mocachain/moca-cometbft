@@ -3,7 +3,6 @@ package mempool
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -270,7 +269,17 @@ func (mem *CListMempool) CheckTx(
 
 	reqRes, err := mem.proxyAppConn.CheckTxAsync(context.TODO(), &abci.RequestCheckTx{Tx: tx})
 	if err != nil {
-		panic(fmt.Errorf("CheckTx request for tx %s failed: %w", log.NewLazySprintf("%v", tx.Hash()), err))
+		// A dead ABCI app is already handled by multiAppConn.killTMOnClientError,
+		// which stops the process with an operator-facing message. Panicking here
+		// as well only replaces that with a stack trace thrown from under the
+		// mempool lock, and it turns a recoverable proxy error into a crash.
+		//
+		// Undo the cache push so the tx is retryable once the app is healthy;
+		// leaving it cached would make every resubmission look like a duplicate.
+		mem.cache.Remove(tx)
+		mem.logger.Error("CheckTx request failed",
+			"tx", log.NewLazySprintf("%v", tx.Hash()), "err", err)
+		return err
 	}
 	reqRes.SetCallback(mem.reqResCb(tx, txInfo, cb))
 
@@ -676,7 +685,15 @@ func (mem *CListMempool) recheckTxs() {
 			Type: abci.CheckTxType_Recheck,
 		})
 		if err != nil {
-			panic(fmt.Errorf("(re-)CheckTx request for tx %s failed: %w", log.NewLazySprintf("%v", tx.Hash()), err))
+			// Same reasoning as CheckTx: let killTMOnClientError decide whether the
+			// app is really gone. Roll back the pending count we just took so the
+			// wait below is not left hanging until RecheckTimeout, and abandon the
+			// rest of this pass; the accounting further down already reports an
+			// incomplete recheck, and the remaining txs are rechecked next Update.
+			mem.recheck.numPendingTxs.Add(-1)
+			mem.logger.Error("recheck request failed; abandoning this recheck pass",
+				"tx", log.NewLazySprintf("%v", tx.Hash()), "err", err)
+			break
 		}
 	}
 
