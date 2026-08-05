@@ -87,8 +87,7 @@ func TestReactorBroadcastVotes(t *testing.T) {
 	pks0Bts, _ := pks[0].Marshal()
 	secKey, _ := bls.UnmarshalPrivateKey(pks0Bts)
 	eventHash1 := common.HexToHash("0xeefacfed87736ae1d8e8640f6fd7951862997782e5e79842557923e2779d5d5a").Bytes()
-	sign1, _ := secKey.Sign(eventHash1, DST)
-	sign1Bts, _ := sign1.Marshal()
+	sign1Bts := signVote(secKey, testEventType, eventHash1)
 	vote1 := Vote{
 		PubKey:    vals[0].BlsKey,
 		Signature: sign1Bts,
@@ -101,8 +100,7 @@ func TestReactorBroadcastVotes(t *testing.T) {
 	waitVotesReceived(t, reactors, eventHash1)
 
 	eventHash2 := common.HexToHash("0x7e19be15d0d524a1ca5e39be503d18584c23426920bdc23b159c37a2341913d0").Bytes()
-	sign2, _ := secKey.Sign(eventHash2, DST)
-	sign2Bts, _ := sign2.Marshal()
+	sign2Bts := signVote(secKey, testEventType, eventHash2)
 	vote2 := Vote{
 		PubKey:    vals[0].BlsKey,
 		Signature: sign2Bts,

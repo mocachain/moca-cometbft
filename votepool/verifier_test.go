@@ -82,8 +82,7 @@ func TestVoteBlsVerifier(t *testing.T) {
 	eventHash := common.HexToHash("0xeefacfed87736ae1d8e8640f6fd7951862997782e5e79842557923e2779d5d5a").Bytes()
 	privKeyBts, _ := privKey.Marshal()
 	secKey, _ := bls.UnmarshalPrivateKey(privKeyBts)
-	sign, _ := secKey.Sign(eventHash, DST)
-	signBts, _ := sign.Marshal()
+	signBts := signVote(secKey, EventType(0), eventHash)
 
 	verifier := &BlsSignatureVerifier{}
 
@@ -106,4 +105,61 @@ func TestVoteBlsVerifier(t *testing.T) {
 	}
 	err = verifier.Validate(&vote2)
 	require.Error(t, err)
+}
+
+// TestBlsSignatureVerifier_RejectsCrossEventTypeReplay pins the EventType binding
+// in the signed preimage. A signature produced for one event type must not verify
+// when the same (EventHash, PubKey) is replayed under a different event type.
+//
+// Before EventType was bound into the preimage this replay verified successfully,
+// which let an attacker inject a valid vote into the wrong bucket and — because
+// the dedup key was also EventType-blind — censor the legitimate vote for the
+// original bucket.
+func TestBlsSignatureVerifier_RejectsCrossEventTypeReplay(t *testing.T) {
+	blsPrivKey, err := bls.GenerateBlsKey()
+	require.NoError(t, err)
+	privBts, err := blsPrivKey.Marshal()
+	require.NoError(t, err)
+	secKey, err := bls.UnmarshalPrivateKey(privBts)
+	require.NoError(t, err)
+
+	eventHash := common.HexToHash("0xeefacfed87736ae1d8e8640f6fd7951862997782e5e79842557923e2779d5d5a").Bytes()
+	signed := signVote(secKey, FromBscCrossChainEvent, eventHash)
+
+	verifier := &BlsSignatureVerifier{}
+
+	// Same event type it was signed for: valid.
+	honest := &Vote{
+		PubKey:    blsPrivKey.PublicKey().Marshal(),
+		Signature: signed,
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.NoError(t, verifier.Validate(honest), "vote must verify under the event type it was signed for")
+
+	// Replayed into a different bucket with the identical signature: rejected.
+	for _, replayed := range []EventType{
+		ToBscCrossChainEvent,
+		FromOpCrossChainEvent,
+		ToOpCrossChainEvent,
+		DataAvailabilityChallengeEvent,
+	} {
+		v := &Vote{
+			PubKey:    blsPrivKey.PublicKey().Marshal(),
+			Signature: signed,
+			EventType: replayed,
+			EventHash: eventHash,
+		}
+		require.Error(t, verifier.Validate(v),
+			"signature for FromBscCrossChainEvent must not verify as event type %d", replayed)
+	}
+
+	// The dedup key must also differ per event type, otherwise a vote cached under
+	// one type silently suppresses the legitimate vote for another.
+	require.NotEqual(t, honest.Key(), (&Vote{
+		PubKey:    honest.PubKey,
+		Signature: honest.Signature,
+		EventType: ToBscCrossChainEvent,
+		EventHash: eventHash,
+	}).Key(), "dedup key must be event-type specific")
 }
