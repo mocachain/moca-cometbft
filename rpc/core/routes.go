@@ -53,8 +53,11 @@ func (env *Environment) GetRoutes() RoutesMap {
 		"broadcast_evidence": rpc.NewRPCFunc(env.BroadcastEvidence, "evidence"),
 
 		// vote pool API
-		"broadcast_vote": rpc.NewRPCFunc(env.BroadcastVote, "vote"),
-		"query_vote":     rpc.NewRPCFunc(env.QueryVote, "event_type,event_hash"),
+		// NOTE: broadcast_vote is deliberately NOT here -- it is registered by
+		// AddUnsafeRoutes. Submitting a vote forces a BN254 pairing, so an
+		// unauthenticated caller can burn CPU at will. query_vote is read-only
+		// and stays open.
+		"query_vote": rpc.NewRPCFunc(env.QueryVote, "event_type,event_hash"),
 	}
 }
 
@@ -65,4 +68,7 @@ func (env *Environment) AddUnsafeRoutes(routes RoutesMap) {
 	routes["dial_peers"] = rpc.NewRPCFunc(env.UnsafeDialPeers, "peers,persistent,unconditional,private")
 	routes["unsafe_flush_mempool"] = rpc.NewRPCFunc(env.UnsafeFlushMempool, "")
 	routes["unsafe_flush_vote_pool"] = rpc.NewRPCFunc(env.UnsafeFlushVotePool, "")
+	// Vote submission triggers BLS verification, which is expensive enough to be
+	// a CPU-exhaustion vector when exposed to anyone who can reach the RPC port.
+	routes["broadcast_vote"] = rpc.NewRPCFunc(env.BroadcastVote, "vote")
 }
