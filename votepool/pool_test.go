@@ -294,3 +294,40 @@ func TestPool_ValidatorSetUpdate(t *testing.T) {
 	err = votePool.AddVote(&vote1)
 	require.NoError(t, err)
 }
+
+// TestPool_NegativeCacheSkipsRepeatBlsVerification pins that a (vote, signature)
+// pair which already failed BLS verification is rejected on resubmission without
+// re-running the pairing, and that a later vote carrying a *correct* signature for
+// the same event and key is still accepted.
+func TestPool_NegativeCacheSkipsRepeatBlsVerification(t *testing.T) {
+	pk1, val1, _, _, _, votePool := makeVotePool()
+	pk1Bts, _ := pk1.Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(pk1Bts)
+
+	eventHash := common.HexToHash("0x1d1e6a8a4e3b7f9c2d5e8a0b3c6d9f2a5b8e1c4d7a0b3e6f9c2d5a8b1e4f7a0b").Bytes()
+
+	// A real validator key with a bogus signature: passes the cheap validator
+	// check and would otherwise reach BLS verification on every submission.
+	bad := &Vote{
+		PubKey:    val1.BlsKey,
+		Signature: make([]byte, signatureLen),
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.Error(t, votePool.AddVote(bad), "bogus signature must be rejected")
+	negKey := bad.Key() + string(bad.Signature)
+	require.True(t, votePool.negCache.Contains(negKey), "failed pair must be remembered")
+
+	// Same bad pair again: still rejected, now short-circuited by the cache.
+	require.Error(t, votePool.AddVote(bad), "repeat of a known-bad signature must stay rejected")
+
+	// A correct signature for the same event and key must still get through --
+	// the negative cache keys on the signature, not just the vote identity.
+	good := &Vote{
+		PubKey:    val1.BlsKey,
+		Signature: func() []byte { sig, _ := secKey.Sign(eventHash, DST); b, _ := sig.Marshal(); return b }(),
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.NoError(t, votePool.AddVote(good), "valid signature must not be blocked by the negative cache")
+}
