@@ -40,6 +40,11 @@ const (
 
 	// Event bus client ID used for the validator-update subscription.
 	votePoolSubscriber = "VotePoolService"
+
+	// Delay before re-subscribing after the validator-update subscription is
+	// cancelled. Without it a persistently failing subscription spins the routine
+	// with no pause, burning CPU and flooding logs.
+	resubscribeBackoff = time.Second
 )
 
 // voteStore stores one type of votes.
@@ -304,6 +309,12 @@ func (p *Pool) validatorUpdateRoutine() {
 		p.Logger.Error("Validator update subscription cancelled; resubscribing")
 		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil {
 			p.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
+			return
+		}
+		// Pause before retrying, and stay responsive to shutdown while waiting.
+		select {
+		case <-time.After(resubscribeBackoff):
+		case <-p.Quit():
 			return
 		}
 	}
