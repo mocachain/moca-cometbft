@@ -899,13 +899,16 @@ func TestMempoolSyncRecheckTxReturnError(t *testing.T) {
 	// On the second CheckTx request, the app returns an error.
 	mockClient.On("CheckTxAsync", mock.Anything, mock.Anything).Return(nil, errors.New("")).Once()
 
-	// Rechecking should panic when the call to the app returns an error.
-	defer func() {
-		if r := recover(); r == nil {
-			t.Errorf("recheckTxs did not panic")
-		}
-	}()
-	mp.recheckTxs()
+	// Rechecking must NOT panic when the call to the app returns an error: a dead
+	// application is handled by proxy.multiAppConn.killTMOnClientError, and
+	// panicking from under the mempool lock turned recoverable proxy errors into
+	// node crashes. The pass is abandoned instead and the remaining txs are
+	// rechecked on the next update.
+	//
+	// (Upstream asserts a panic here. This assertion is deliberately inverted --
+	// see the ABCI-error handling in recheckTxs.)
+	require.NotPanics(t, func() { mp.recheckTxs() })
+	require.True(t, mp.recheck.done(), "recheck state must be left idle after an abandoned pass")
 }
 
 // Test that rechecking finishes correctly when a CheckTx response never arrives, when using an
@@ -1124,4 +1127,51 @@ func TestCheckTxReturnsErrorInsteadOfPanickingOnABCIError(t *testing.T) {
 		err = mp.CheckTx(tx, nil, TxInfo{})
 	})
 	require.ErrorIs(t, err, abciErr, "tx must remain retryable, not be swallowed as ErrTxInCache")
+}
+
+// TestRecheckAbandonedOnABCIErrorDoesNotStallUpdate pins that when an ABCI
+// recheck request fails, recheckTxs abandons the pass immediately instead of
+// blocking for the full RecheckTimeout.
+//
+// The wait in recheckTxs is released by doneCh, which tryFinish only signals once
+// the cursor reaches rc.end -- unreachable once we stop issuing requests. Simply
+// rolling back numPendingTxs does NOT release it (that counter only feeds a log
+// line), so the abandon path must call setDone and skip the wait. Otherwise
+// Update stalls for RecheckTimeout while holding the mempool lock, on the
+// consensus commit path.
+func TestRecheckAbandonedOnABCIErrorDoesNotStallUpdate(t *testing.T) {
+	mockClient := new(abciclimocks.Client)
+	mockClient.On("Start").Return(nil)
+	mockClient.On("SetLogger", mock.Anything)
+	mockClient.On("Error").Return(nil)
+	mockClient.On("SetResponseCallback", mock.Anything)
+	mockClient.On("Flush", mock.Anything).Return(nil)
+
+	mp, cleanup, err := newMempoolWithAppMock(mockClient)
+	require.NoError(t, err)
+	defer cleanup()
+	mp.config.RecheckTimeout = 3 * time.Second
+
+	// Seed one tx so a recheck pass has something to walk.
+	tx := types.Tx{0x01}
+	reqRes := newReqRes(tx, abci.CodeTypeOK, abci.CheckTxType_New)
+	mockClient.On("CheckTxAsync", mock.Anything, mock.MatchedBy(func(r *abci.RequestCheckTx) bool {
+		return r.Type == abci.CheckTxType_New
+	})).Return(reqRes, nil).Once()
+	require.NoError(t, mp.CheckTx(tx, nil, TxInfo{}))
+	reqRes.InvokeCallback()
+	require.Equal(t, 1, mp.Size())
+
+	// Recheck requests now fail at the ABCI layer.
+	mockClient.On("CheckTxAsync", mock.Anything, mock.MatchedBy(func(r *abci.RequestCheckTx) bool {
+		return r.Type == abci.CheckTxType_Recheck
+	})).Return(nil, errors.New("abci connection is down"))
+
+	start := time.Now()
+	require.NotPanics(t, func() { mp.recheckTxs() })
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, mp.config.RecheckTimeout,
+		"abandoned recheck must not block for RecheckTimeout (took %s)", elapsed)
+	require.True(t, mp.recheck.done(), "recheck state must be left idle so the next pass can init")
 }

@@ -672,6 +672,10 @@ func (mem *CListMempool) recheckTxs() {
 
 	mem.recheck.init(mem.txs.Front(), mem.txs.Back())
 
+	// Set when an ABCI request fails and the pass is cut short; the wait below is
+	// then already satisfied and must be skipped.
+	abandoned := false
+
 	// NOTE: globalCb may be called concurrently, but CheckTx cannot be executed concurrently
 	// because this function has the lock (via Update and Lock).
 	for e := mem.txs.Front(); e != nil; e = e.Next() {
@@ -686,15 +690,27 @@ func (mem *CListMempool) recheckTxs() {
 		})
 		if err != nil {
 			// Same reasoning as CheckTx: let killTMOnClientError decide whether the
-			// app is really gone. Roll back the pending count we just took so the
-			// wait below is not left hanging until RecheckTimeout, and abandon the
-			// rest of this pass; the accounting further down already reports an
-			// incomplete recheck, and the remaining txs are rechecked next Update.
+			// app is really gone, rather than panicking from under the mempool lock.
+			//
+			// Abandon the rest of the pass and mark rechecking finished. setDone is
+			// what actually releases the wait below: doneCh is only ever signalled
+			// by tryFinish when the cursor reaches rc.end, which cannot happen now
+			// that we have stopped issuing requests. Without it Update would block
+			// for the full RecheckTimeout while holding the mempool lock, on the
+			// consensus commit path.
 			mem.recheck.numPendingTxs.Add(-1)
 			mem.logger.Error("recheck request failed; abandoning this recheck pass",
 				"tx", log.NewLazySprintf("%v", tx.Hash()), "err", err)
+			abandoned = true
+			mem.recheck.setDone()
 			break
 		}
+	}
+
+	if abandoned {
+		mem.logger.Error("recheck abandoned; remaining txs will be rechecked on the next update",
+			"height", mem.height.Load())
+		return
 	}
 
 	// Flush any pending asynchronous recheck requests to process.
