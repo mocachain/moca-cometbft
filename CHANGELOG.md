@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## Unreleased
+
+### BUG FIXES
+
+- `[votepool]` stop `pruneVotes` deleting a live vote when an expiring queue
+  entry shares its `(EventHash, PubKey)` with one re-inserted after a dedup
+  cache eviction
+  ([\#27](https://github.com/mocachain/moca-cometbft/pull/27))
+
+### IMPROVEMENTS
+
+- `[votepool]` remember signatures that already failed BLS verification, so an
+  identical resubmission is dropped without repeating the pairing
+  ([\#27](https://github.com/mocachain/moca-cometbft/pull/27))
+
 ## v0.38.25
 
 *July 27, 2026*
