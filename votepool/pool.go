@@ -20,6 +20,11 @@ const (
 	// The number of cached votes (i.e., keys) to quickly filter out when adding votes.
 	cacheVoteSize = 1024
 
+	// The number of (vote, signature) pairs remembered after they failed BLS
+	// verification, so an identical resubmission is dropped without repeating
+	// the BN254 pairing.
+	negativeCacheVoteSize = 4096
+
 	// Vote will be assigned the expired at time when adding to the Pool.
 	voteKeepAliveAfter = time.Second * 30
 
@@ -114,8 +119,20 @@ func (s *voteStore) pruneVotes() []string {
 
 	if expires, err := s.queue.PopUntil(current); err == nil {
 		for _, expire := range expires {
+			// The same (EventHash, PubKey) can be inserted more than once -- if the
+			// dedup cache evicted its key, a re-submission reaches addVote again and
+			// overwrites the map entry while leaving the older queue entry in place.
+			// Only drop the map entry when it is still the vote that just expired,
+			// otherwise the stale queue entry evicts a live vote early.
+			// The string() conversions stay inline so the compiler can elide the
+			// allocation on map access (staticcheck SA6001).
+			if subM, ok := s.voteMap[string(expire.EventHash[:])]; ok {
+				if live, ok := subM[string(expire.PubKey[:])]; ok && live != expire {
+					continue
+				}
+				delete(subM, string(expire.PubKey[:]))
+			}
 			keys = append(keys, expire.Key())
-			delete(s.voteMap[string(expire.EventHash[:])], string(expire.PubKey[:]))
 		}
 	}
 	return keys
@@ -134,6 +151,11 @@ type Pool struct {
 
 	cache *lru.Cache // to cache recent added votes' keys
 
+	// negCache remembers (vote key, signature) pairs that already failed BLS
+	// verification. Verification is the expensive step, and nothing else stops a
+	// peer replaying the same bad signature to force the pairing every time.
+	negCache *lru.Cache
+
 	eventBus *types.EventBus // to subscribe validator update events and publish new added vote events
 }
 
@@ -148,7 +170,8 @@ func NewVotePool(logger log.Logger, validators []*types.Validator, eventBus *typ
 		stores[et] = store
 	}
 
-	cache, _ := lru.New(cacheVoteSize) // positive parameter will never return error
+	cache, _ := lru.New(cacheVoteSize)            // positive parameter will never return error
+	negCache, _ := lru.New(negativeCacheVoteSize) // positive parameter will never return error
 
 	// set the initial validators
 	validatorVerifier := NewFromValidatorVerifier()
@@ -157,6 +180,7 @@ func NewVotePool(logger log.Logger, validators []*types.Validator, eventBus *typ
 		stores:            stores,
 		ticker:            ticker,
 		cache:             cache,
+		negCache:          negCache,
 		eventBus:          eventBus,
 		blsVerifier:       &BlsSignatureVerifier{},
 		validatorVerifier: validatorVerifier,
@@ -200,7 +224,14 @@ func (p *Pool) AddVote(vote *Vote) error {
 	if err = p.validatorVerifier.Validate(vote); err != nil {
 		return err
 	}
+	// Keyed on the signature too: a later vote carrying a correct signature for
+	// the same event and key must still be accepted.
+	negKey := vote.Key() + string(vote.Signature)
+	if p.negCache.Contains(negKey) {
+		return errors.New("vote signature previously failed verification")
+	}
 	if err = p.blsVerifier.Validate(vote); err != nil {
+		p.negCache.Add(negKey, struct{}{})
 		return err
 	}
 
@@ -238,6 +269,7 @@ func (p *Pool) FlushVotes() {
 		store.flushVotes()
 	}
 	p.cache.Purge()
+	p.negCache.Purge()
 }
 
 // validatorUpdateRoutine will sync validator updates.

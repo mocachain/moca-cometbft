@@ -294,3 +294,70 @@ func TestPool_ValidatorSetUpdate(t *testing.T) {
 	err = votePool.AddVote(&vote1)
 	require.NoError(t, err)
 }
+
+// TestPool_NegativeCacheSkipsRepeatBlsVerification pins that a (vote, signature)
+// pair which already failed BLS verification is rejected on resubmission without
+// re-running the pairing, and that a later vote carrying a *correct* signature for
+// the same event and key is still accepted.
+func TestPool_NegativeCacheSkipsRepeatBlsVerification(t *testing.T) {
+	pk1, val1, _, _, _, votePool := makeVotePool()
+	pk1Bts, _ := pk1.Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(pk1Bts)
+
+	eventHash := common.HexToHash("0x1d1e6a8a4e3b7f9c2d5e8a0b3c6d9f2a5b8e1c4d7a0b3e6f9c2d5a8b1e4f7a0b").Bytes()
+
+	// A real validator key with a bogus signature: passes the cheap validator
+	// check and would otherwise reach BLS verification on every submission.
+	bad := &Vote{
+		PubKey:    val1.BlsKey,
+		Signature: make([]byte, signatureLen),
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.Error(t, votePool.AddVote(bad), "bogus signature must be rejected")
+	negKey := bad.Key() + string(bad.Signature)
+	require.True(t, votePool.negCache.Contains(negKey), "failed pair must be remembered")
+
+	// Same bad pair again: still rejected, now short-circuited by the cache.
+	require.Error(t, votePool.AddVote(bad), "repeat of a known-bad signature must stay rejected")
+
+	// A correct signature for the same event and key must still get through --
+	// the negative cache keys on the signature, not just the vote identity.
+	good := &Vote{
+		PubKey:    val1.BlsKey,
+		Signature: func() []byte { sig, _ := secKey.Sign(eventHash, DST); b, _ := sig.Marshal(); return b }(),
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.NoError(t, votePool.AddVote(good), "valid signature must not be blocked by the negative cache")
+}
+
+// TestVoteStore_PruneKeepsReinsertedVote pins the defect this fix is named for.
+//
+// The same (EventHash, PubKey) can be inserted twice: once the dedup cache
+// evicts its key, a resubmission reaches addVote again, overwrites the map entry
+// and appends a SECOND queue entry. When the older queue entry expires, pruning
+// by (EventHash, PubKey) alone deleted the newer, still-live vote.
+func TestVoteStore_PruneKeepsReinsertedVote(t *testing.T) {
+	store := newVoteStore()
+
+	eventHash := common.HexToHash("0x3f2a1b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a").Bytes()
+	pubKey := make([]byte, pubKeyLen)
+
+	// First insertion, already expired.
+	stale := &Vote{PubKey: pubKey, EventType: FromBscCrossChainEvent, EventHash: eventHash}
+	stale.expireAt = time.Now().Add(-time.Minute)
+	store.addVote(stale)
+
+	// Re-insertion of the same identity while the stale queue entry is still
+	// queued -- this is what happens after a dedup-cache eviction.
+	fresh := &Vote{PubKey: pubKey, EventType: FromBscCrossChainEvent, EventHash: eventHash}
+	fresh.expireAt = time.Now().Add(time.Minute)
+	store.addVote(fresh)
+
+	store.pruneVotes()
+
+	got := store.getVotesByEventHash(eventHash)
+	require.Len(t, got, 1, "the live re-inserted vote must survive pruning of the stale entry")
+	require.Same(t, fresh, got[0], "the surviving vote must be the re-inserted one, not the expired one")
+}
