@@ -4,12 +4,22 @@
 
 ### BUG FIXES
 
+- `[votepool]` stop `pruneVotes` deleting a live vote when an expiring queue
+  entry shares its `(EventHash, PubKey)` with one re-inserted after a dedup
+  cache eviction
+  ([\#27](https://github.com/mocachain/moca-cometbft/pull/27))
 - `[votepool]` recover from validator-set subscription loss instead of exiting,
   which previously froze the validator set for the lifetime of the process;
   release the event-bus client on stop so a restarted pool still receives
   updates; stop `pruneVoteRoutine` leaking a goroutine per start/stop cycle;
   and check the validator-update payload type before asserting it
   ([\#28](https://github.com/mocachain/moca-cometbft/pull/28))
+
+### IMPROVEMENTS
+
+- `[votepool]` remember signatures that already failed BLS verification, so an
+  identical resubmission is dropped without repeating the pairing
+  ([\#27](https://github.com/mocachain/moca-cometbft/pull/27))
 
 ## v0.38.25
 

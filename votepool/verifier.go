@@ -46,9 +46,8 @@ func (f *FromValidatorVerifier) updateValidators(changes []*types.Validator) err
 	}
 	f.validators = make(map[string]*types.Validator)
 	valSet := &types.ValidatorSet{Validators: vals}
-	// Deliberately keep whatever validators the set ended up with even on error,
-	// but surface the failure -- silently swallowing it leaves operators running
-	// a stale validator set with no signal.
+	// Keep whatever the set ended up with even on error (as before), but
+	// surface the failure instead of swallowing it.
 	err := valSet.UpdateWithChangeSet(changes)
 	for _, val := range valSet.Validators {
 		if len(val.BlsKey) > 0 {

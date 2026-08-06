@@ -98,11 +98,9 @@ func addValidatorUpdate(val *types.Validator) types.EventDataValidatorSetUpdates
 	}
 }
 
-// requireValidatorCount republishes update until the pool's validator set
-// reaches want. Republishing matters because the pool may be inside its
-// resubscribe backoff, during which published events reach nobody; bounding it
-// matters because a pool that never applies the update should fail the test
-// rather than hang it.
+// requireValidatorCount republishes update until the set reaches want. It
+// republishes because the pool may be mid-backoff, and it is bounded so a pool
+// that never applies the update fails the test rather than hanging it.
 func requireValidatorCount(t *testing.T, p *Pool, bus *types.EventBus, update types.EventDataValidatorSetUpdates, want int, msg string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -363,19 +361,18 @@ func TestVoteStore_PruneKeepsReinsertedVote(t *testing.T) {
 	got := store.getVotesByEventHash(eventHash)
 	require.Len(t, got, 1, "the live re-inserted vote must survive pruning of the stale entry")
 	require.Same(t, fresh, got[0], "the surviving vote must be the re-inserted one, not the expired one")
-// A canceled subscription must be recovered from. pubsub cancels the whole
-// subscription when the subscriber's buffer overflows; returning at that point
-// freezes the validator set for the lifetime of the process, so removed
-// validators keep being accepted and newly added ones keep being rejected.
+}
+
+// A canceled subscription must be recovered from: pubsub cancels it wholesale
+// on buffer overflow, and returning there freezes the validator set.
 func TestPool_ResubscribesAfterSubscriptionCanceled(t *testing.T) {
 	_, val1, _, _, eventBus, votePool := makeVotePool()
 	t.Cleanup(func() { _ = votePool.Stop(); _ = eventBus.Stop() })
 
 	require.Equal(t, 2, votePool.validatorVerifier.lenOfValidators())
 
-	// Cancel the subscription out from under the pool, as an overflow would.
-	// Retried because the routine subscribes asynchronously after Start; a
-	// successful Unsubscribe is also proof the subscription was there to cancel.
+	// Cancel it as an overflow would. Retried because the routine subscribes
+	// asynchronously; success also proves there was a subscription to cancel.
 	require.Eventually(t, func() bool {
 		return eventBus.Unsubscribe(
 			context.Background(), votePoolSubscriber, types.EventQueryValidatorSetUpdates) == nil
@@ -385,17 +382,14 @@ func TestPool_ResubscribesAfterSubscriptionCanceled(t *testing.T) {
 		"validator updates stopped being applied after the subscription was canceled")
 }
 
-// Stopping the pool must release its event-bus client. If it does not, a pool
-// restarted on the same bus re-subscribes with the same ID, gets
-// ErrAlreadySubscribed, and silently never receives another validator update.
+// Stopping the pool must release its event-bus client, or a pool restarted on
+// the same bus hits ErrAlreadySubscribed and silently stops seeing updates.
 func TestPool_RestartStillReceivesValidatorUpdates(t *testing.T) {
 	_, val1, _, val2, eventBus, first := makeVotePool()
 	t.Cleanup(func() { _ = eventBus.Stop() })
 
-	// Wait until the first pool is demonstrably subscribed and consuming. Without
-	// this it is usually stopped before it ever registered its client, so the
-	// leak under test never gets a chance to happen and the assertion below
-	// passes for the wrong reason.
+	// Wait until it is demonstrably subscribed; otherwise it is stopped before
+	// registering and the assertion below passes for the wrong reason.
 	requireValidatorCount(t, first, eventBus, removeValidatorUpdate(val2), 1,
 		"first pool never applied a validator update, so it was never subscribed")
 
@@ -415,9 +409,8 @@ func TestPool_UnexpectedValidatorUpdatePayloadDoesNotStopUpdates(t *testing.T) {
 	_, val1, _, _, eventBus, votePool := makeVotePool()
 	t.Cleanup(func() { _ = votePool.Stop(); _ = eventBus.Stop() })
 
-	// Wait until the routine is demonstrably subscribed and consuming. Published
-	// before that, the bad payload is simply never delivered and the test passes
-	// without ever exercising the assertion it exists for.
+	// Wait until subscribed; published earlier the bad payload is never
+	// delivered and the test passes without exercising anything.
 	requireValidatorCount(t, votePool, eventBus, removeValidatorUpdate(val1), 1,
 		"pool never applied a validator update, so it was never subscribed")
 

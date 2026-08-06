@@ -42,9 +42,8 @@ const (
 	// Event bus client ID used for the validator-update subscription.
 	votePoolSubscriber = "VotePoolService"
 
-	// Delay before re-subscribing after the validator-update subscription is
-	// canceled. Without it a persistently failing subscription spins the routine
-	// with no pause, burning CPU and flooding logs.
+	// Pause between subscribe attempts, so a persistently failing
+	// subscription cannot spin the routine.
 	resubscribeBackoff = time.Second
 )
 
@@ -214,11 +213,8 @@ func (p *Pool) OnStart() error {
 func (p *Pool) OnStop() {
 	p.BaseService.OnStop()
 	p.ticker.Stop()
-	// Without this the event bus keeps the "VotePoolService" client registered,
-	// so a restart re-subscribing with the same ID gets ErrAlreadySubscribed and
-	// validatorUpdateRoutine exits immediately -- validator updates silently stop.
-	// A canceled subscription is already removed by pubsub, so "not found" here
-	// is the normal path after a cancellation rather than a failure.
+	// Leaving the client registered makes a restarted pool hit
+	// ErrAlreadySubscribed. NotFound is expected after a cancellation.
 	if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
 		!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
 		p.Logger.Error("Cannot unsubscribe from event bus", "err", err.Error())
@@ -291,24 +287,14 @@ func (p *Pool) FlushVotes() {
 	p.negCache.Purge()
 }
 
-// validatorUpdateRoutine will sync validator updates.
-//
-// A canceled subscription is recoverable: pubsub cancels the whole subscription
-// when its buffer overflows, and simply returning here would freeze the validator
-// set for the lifetime of the process -- removed validators would keep being
-// accepted and new ones rejected. Resubscribe instead.
+// validatorUpdateRoutine syncs validator updates, resubscribing when the
+// subscription is canceled -- pubsub cancels it wholesale on buffer overflow,
+// and returning would freeze the validator set for the life of the process.
 func (p *Pool) validatorUpdateRoutine() {
-	// Always release the event-bus client on the way out. OnStop cannot do this
-	// alone: it may run before this routine has subscribed at all, in which case
-	// the Subscribe below lands afterwards and the registration would leak for
-	// the lifetime of the bus, locking out every later pool with "already
-	// subscribed".
-	//
-	// The client ID is a constant, so on an event bus shared by more than one
-	// pool this also drops the other pool's subscription. A node runs a single
-	// pool (see node/setup.go), so that only arises in tests and embedded uses,
-	// and the other pool recovers through the resubscribe loop below -- at the
-	// cost of one backoff interval without validator updates.
+	// Release the client here, not just in OnStop: OnStop can run before this
+	// routine subscribes, leaving the later Subscribe registered forever. The
+	// client ID is constant, so on a bus shared by several pools this drops
+	// theirs too; a node runs one pool, and others recover via the loop below.
 	defer func() {
 		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
 			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
@@ -322,10 +308,8 @@ func (p *Pool) validatorUpdateRoutine() {
 		}
 		sub, err := p.eventBus.Subscribe(context.Background(), votePoolSubscriber, types.EventQueryValidatorSetUpdates, eventBusSubscribeCap)
 		if err != nil {
-			// Recoverable: a predecessor pool on this bus may still be releasing
-			// the same client ID, which surfaces as "already subscribed". Giving
-			// up here would freeze the validator set exactly as a cancellation
-			// would, so retry rather than exit.
+			// Recoverable -- e.g. a predecessor still releasing the same client
+			// ID. Exiting would freeze the validator set, so retry.
 			p.Logger.Error("Cannot subscribe to validator set update event; retrying", "err", err.Error())
 			if !p.waitBeforeRetry() {
 				return
@@ -336,13 +320,9 @@ func (p *Pool) validatorUpdateRoutine() {
 			return
 		}
 		p.Logger.Error("Validator update subscription canceled; resubscribing")
-		// pubsub removes a subscription before canceling it, so by the time we get
-		// here there is usually nothing left to unsubscribe, and NotFound is the
-		// expected result. Nothing here is worth exiting for: if the old
-		// subscription did somehow survive, that surfaces as ErrAlreadySubscribed
-		// on the next Subscribe, which is retried at the top of the loop. Exiting
-		// would freeze the validator set -- the exact failure this loop exists to
-		// prevent.
+		// NotFound is expected -- pubsub removes a subscription before canceling
+		// it. Nothing here warrants exiting: a survivor resurfaces as
+		// ErrAlreadySubscribed on the next Subscribe, which already retries.
 		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
 			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
 			p.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
@@ -370,8 +350,7 @@ func (p *Pool) consumeValidatorUpdates(sub types.Subscription) bool {
 	for {
 		select {
 		case validatorData := <-sub.Out():
-			// Two-return form: a different payload published under this query would
-			// otherwise panic the routine.
+			// Two-return form: another payload type would otherwise panic.
 			changes, ok := validatorData.Data().(types.EventDataValidatorSetUpdates)
 			if !ok {
 				p.Logger.Error("Unexpected payload on validator set update event",
