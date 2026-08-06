@@ -119,18 +119,18 @@ func (s *voteStore) pruneVotes() []string {
 
 	if expires, err := s.queue.PopUntil(current); err == nil {
 		for _, expire := range expires {
-			eventHashStr := string(expire.EventHash[:])
-			pubKeyStr := string(expire.PubKey[:])
 			// The same (EventHash, PubKey) can be inserted more than once -- if the
 			// dedup cache evicted its key, a re-submission reaches addVote again and
 			// overwrites the map entry while leaving the older queue entry in place.
 			// Only drop the map entry when it is still the vote that just expired,
 			// otherwise the stale queue entry evicts a live vote early.
-			if subM, ok := s.voteMap[eventHashStr]; ok {
-				if current, ok := subM[pubKeyStr]; ok && current != expire {
+			// The string() conversions stay inline so the compiler can elide the
+			// allocation on map access (staticcheck SA6001).
+			if subM, ok := s.voteMap[string(expire.EventHash[:])]; ok {
+				if live, ok := subM[string(expire.PubKey[:])]; ok && live != expire {
 					continue
 				}
-				delete(subM, pubKeyStr)
+				delete(subM, string(expire.PubKey[:]))
 			}
 			keys = append(keys, expire.Key())
 		}
