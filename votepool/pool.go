@@ -303,6 +303,12 @@ func (p *Pool) validatorUpdateRoutine() {
 	// the Subscribe below lands afterwards and the registration would leak for
 	// the lifetime of the bus, locking out every later pool with "already
 	// subscribed".
+	//
+	// The client ID is a constant, so on an event bus shared by more than one
+	// pool this also drops the other pool's subscription. A node runs a single
+	// pool (see node/setup.go), so that only arises in tests and embedded uses,
+	// and the other pool recovers through the resubscribe loop below -- at the
+	// cost of one backoff interval without validator updates.
 	defer func() {
 		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
 			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
@@ -330,15 +336,16 @@ func (p *Pool) validatorUpdateRoutine() {
 			return
 		}
 		p.Logger.Error("Validator update subscription canceled; resubscribing")
-		// pubsub removes a subscription before canceling it, so by the time we
-		// get here there is usually nothing left to unsubscribe. Treating that as
-		// fatal would defeat the whole point of this loop -- the cancellation we
-		// most need to recover from is exactly the one that leaves nothing behind.
-		// A genuine conflict still surfaces on Subscribe at the top of the loop.
+		// pubsub removes a subscription before canceling it, so by the time we get
+		// here there is usually nothing left to unsubscribe, and NotFound is the
+		// expected result. Nothing here is worth exiting for: if the old
+		// subscription did somehow survive, that surfaces as ErrAlreadySubscribed
+		// on the next Subscribe, which is retried at the top of the loop. Exiting
+		// would freeze the validator set -- the exact failure this loop exists to
+		// prevent.
 		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
 			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
 			p.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
-			return
 		}
 		if !p.waitBeforeRetry() {
 			return
