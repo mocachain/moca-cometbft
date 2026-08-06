@@ -12,6 +12,7 @@ import (
 
 	"github.com/cometbft/cometbft/libs/log"
 
+	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
 	"github.com/cometbft/cometbft/libs/sync"
 	"github.com/cometbft/cometbft/types"
 )
@@ -42,7 +43,7 @@ const (
 	votePoolSubscriber = "VotePoolService"
 
 	// Delay before re-subscribing after the validator-update subscription is
-	// cancelled. Without it a persistently failing subscription spins the routine
+	// canceled. Without it a persistently failing subscription spins the routine
 	// with no pause, burning CPU and flooding logs.
 	resubscribeBackoff = time.Second
 )
@@ -216,7 +217,10 @@ func (p *Pool) OnStop() {
 	// Without this the event bus keeps the "VotePoolService" client registered,
 	// so a restart re-subscribing with the same ID gets ErrAlreadySubscribed and
 	// validatorUpdateRoutine exits immediately -- validator updates silently stop.
-	if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil {
+	// A canceled subscription is already removed by pubsub, so "not found" here
+	// is the normal path after a cancellation rather than a failure.
+	if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
+		!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
 		p.Logger.Error("Cannot unsubscribe from event bus", "err", err.Error())
 	}
 }
@@ -289,34 +293,67 @@ func (p *Pool) FlushVotes() {
 
 // validatorUpdateRoutine will sync validator updates.
 //
-// A cancelled subscription is recoverable: pubsub cancels the whole subscription
+// A canceled subscription is recoverable: pubsub cancels the whole subscription
 // when its buffer overflows, and simply returning here would freeze the validator
 // set for the lifetime of the process -- removed validators would keep being
 // accepted and new ones rejected. Resubscribe instead.
 func (p *Pool) validatorUpdateRoutine() {
+	// Always release the event-bus client on the way out. OnStop cannot do this
+	// alone: it may run before this routine has subscribed at all, in which case
+	// the Subscribe below lands afterwards and the registration would leak for
+	// the lifetime of the bus, locking out every later pool with "already
+	// subscribed".
+	defer func() {
+		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
+			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
+			p.Logger.Error("Cannot unsubscribe on exit", "err", err.Error())
+		}
+	}()
+
 	for {
 		if !p.IsRunning() || !p.eventBus.IsRunning() {
 			return
 		}
 		sub, err := p.eventBus.Subscribe(context.Background(), votePoolSubscriber, types.EventQueryValidatorSetUpdates, eventBusSubscribeCap)
 		if err != nil {
-			p.Logger.Error("Cannot subscribe to validator set update event", "err", err.Error())
-			return
+			// Recoverable: a predecessor pool on this bus may still be releasing
+			// the same client ID, which surfaces as "already subscribed". Giving
+			// up here would freeze the validator set exactly as a cancellation
+			// would, so retry rather than exit.
+			p.Logger.Error("Cannot subscribe to validator set update event; retrying", "err", err.Error())
+			if !p.waitBeforeRetry() {
+				return
+			}
+			continue
 		}
 		if resubscribe := p.consumeValidatorUpdates(sub); !resubscribe {
 			return
 		}
-		p.Logger.Error("Validator update subscription cancelled; resubscribing")
-		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil {
+		p.Logger.Error("Validator update subscription canceled; resubscribing")
+		// pubsub removes a subscription before canceling it, so by the time we
+		// get here there is usually nothing left to unsubscribe. Treating that as
+		// fatal would defeat the whole point of this loop -- the cancellation we
+		// most need to recover from is exactly the one that leaves nothing behind.
+		// A genuine conflict still surfaces on Subscribe at the top of the loop.
+		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
+			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
 			p.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
 			return
 		}
-		// Pause before retrying, and stay responsive to shutdown while waiting.
-		select {
-		case <-time.After(resubscribeBackoff):
-		case <-p.Quit():
+		if !p.waitBeforeRetry() {
 			return
 		}
+	}
+}
+
+// waitBeforeRetry pauses before another subscribe attempt, staying responsive to
+// shutdown. It reports whether the caller should keep going.
+func (p *Pool) waitBeforeRetry() bool {
+	select {
+	case <-time.After(resubscribeBackoff):
+		return true
+	case <-p.Quit():
+		return false
 	}
 }
 
