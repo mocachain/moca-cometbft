@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## Unreleased
+
+### IMPROVEMENTS
+
+- `[votepool]` give the vote gossip channel an explicit `SendQueueCapacity`,
+  matching the consensus `VoteChannel`, so a slow peer no longer blocks the
+  per-peer broadcast goroutine on the default queue depth of 1
+  ([\#29](https://github.com/mocachain/moca-cometbft/pull/29))
+
 ## v0.38.25
 
 *July 27, 2026*

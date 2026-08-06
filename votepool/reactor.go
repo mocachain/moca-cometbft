@@ -27,9 +27,9 @@ const (
 	// Key for cache of votes from a peer.
 	peerVoteCacheKey = "VotePoolReactor.voteCache"
 
-	// Outbound queue depth for the vote gossip channel. Sized to absorb a burst
-	// without blocking the per-peer broadcast goroutine.
-	voteSendQueueCapacity = 256
+	// Outbound depth in messages, matching the consensus VoteChannel that this
+	// channel already mirrors in priority.
+	voteSendQueueCapacity = 100
 )
 
 var eventVotePoolAdded = types.QueryForEvent(eventBusVotePoolUpdates)
@@ -99,13 +99,13 @@ func (voteR *Reactor) GetChannels() []*conn.ChannelDescriptor {
 		{
 			ID:       VotePoolChannel,
 			Priority: 7,
-			// Votes are gossiped from a per-peer goroutine using a blocking
-			// peer.Send. With the default queue depth of 1, a slow peer blocks that
-			// goroutine long enough for its event-bus subscription buffer to fill;
-			// pubsub then cancels the subscription and the goroutine exits without
-			// resubscribing, so the peer stops receiving vote gossip until it
-			// reconnects. Give the channel room to absorb bursts.
-			SendQueueCapacity:   voteSendQueueCapacity,
+			// Votes gossip from a per-peer goroutine via a blocking peer.Send; at
+			// the default depth of 1 a slow peer stalls it until its subscription
+			// buffer fills and pubsub cancels it, cutting that peer off until it
+			// reconnects.
+			SendQueueCapacity: voteSendQueueCapacity,
+			// RecvBufferCapacity stays at the 4096-byte default: it sizes a
+			// reassembly buffer, and a vote message is capped at 256 below.
 			RecvMessageCapacity: 256, // size is bigger than Vote message
 			MessageType:         &votepool.Message{},
 		},
