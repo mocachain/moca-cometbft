@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## Unreleased
+
+### BUG FIXES
+
+- `[votepool]` recover from validator-set subscription loss instead of exiting,
+  which previously froze the validator set for the lifetime of the process;
+  release the event-bus client on stop so a restarted pool still receives
+  updates; stop `pruneVoteRoutine` leaking a goroutine per start/stop cycle;
+  and check the validator-update payload type before asserting it
+  ([\#28](https://github.com/mocachain/moca-cometbft/pull/28))
+
 ## v0.38.25
 
 *July 27, 2026*
