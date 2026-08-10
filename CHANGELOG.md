@@ -8,8 +8,13 @@
   matching the consensus `VoteChannel`, so a slow peer no longer blocks the
   per-peer broadcast goroutine on the default queue depth of 1
   ([\#29](https://github.com/mocachain/moca-cometbft/pull/29))
+
 ### BUG FIXES
 
+- `[votepool]` include the event type in the vote dedup key, so a vote recorded
+  under one event type no longer suppresses a different vote that shares its
+  `(EventHash, PubKey)`
+  ([\#31](https://github.com/mocachain/moca-cometbft/pull/31))
 - `[votepool]` stop `pruneVotes` deleting a live vote when an expiring queue
   entry shares its `(EventHash, PubKey)` with one re-inserted after a dedup
   cache eviction
