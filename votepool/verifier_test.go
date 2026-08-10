@@ -61,7 +61,7 @@ func TestVoteFromValidatorVerifier_UpdateValidators(t *testing.T) {
 
 	//remove validator
 	removeVal := &types.Validator{PubKey: pubKey1, Address: pubKey1.Address(), VotingPower: 0}
-	verifier.updateValidators([]*types.Validator{removeVal})
+	require.NoError(t, verifier.updateValidators([]*types.Validator{removeVal}))
 
 	require.Equal(t, 1, len(verifier.validators))
 
@@ -71,7 +71,7 @@ func TestVoteFromValidatorVerifier_UpdateValidators(t *testing.T) {
 	blsPubKey3 := blsPrivKey3.PublicKey().Marshal()
 
 	addVal := &types.Validator{PubKey: pubKey3, Address: pubKey3.Address(), BlsKey: blsPubKey3, VotingPower: 10}
-	verifier.updateValidators([]*types.Validator{addVal})
+	require.NoError(t, verifier.updateValidators([]*types.Validator{addVal}))
 
 	require.Equal(t, 2, len(verifier.validators))
 }
