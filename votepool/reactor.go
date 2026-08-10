@@ -26,6 +26,10 @@ const (
 
 	// Key for cache of votes from a peer.
 	peerVoteCacheKey = "VotePoolReactor.voteCache"
+
+	// Outbound depth in messages, matching the consensus VoteChannel that this
+	// channel already mirrors in priority.
+	voteSendQueueCapacity = 100
 )
 
 var eventVotePoolAdded = types.QueryForEvent(eventBusVotePoolUpdates)
@@ -93,8 +97,15 @@ func (voteR *Reactor) RemovePeer(peer p2p.Peer, reason interface{}) {
 func (voteR *Reactor) GetChannels() []*conn.ChannelDescriptor {
 	return []*p2p.ChannelDescriptor{
 		{
-			ID:                  VotePoolChannel,
-			Priority:            7,
+			ID:       VotePoolChannel,
+			Priority: 7,
+			// Votes gossip from a per-peer goroutine via a blocking peer.Send; at
+			// the default depth of 1 a slow peer stalls it until its subscription
+			// buffer fills and pubsub cancels it, cutting that peer off until it
+			// reconnects.
+			SendQueueCapacity: voteSendQueueCapacity,
+			// RecvBufferCapacity stays at the 4096-byte default: it sizes a
+			// reassembly buffer, and a vote message is capped at 256 below.
 			RecvMessageCapacity: 256, // size is bigger than Vote message
 			MessageType:         &votepool.Message{},
 		},

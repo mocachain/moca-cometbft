@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### IMPROVEMENTS
+
+- `[votepool]` give the vote gossip channel an explicit `SendQueueCapacity`,
+  matching the consensus `VoteChannel`, so a slow peer no longer blocks the
+  per-peer broadcast goroutine on the default queue depth of 1
+  ([\#29](https://github.com/mocachain/moca-cometbft/pull/29))
 ### BUG FIXES
 
 - `[votepool]` stop `pruneVotes` deleting a live vote when an expiring queue
