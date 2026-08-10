@@ -80,6 +80,35 @@ func makeValidVotes(secKey *bls.PrivateKey, val1 *types.Validator) (Vote, Vote, 
 	return vote1, vote2, vote3
 }
 
+// removeValidatorUpdate builds an update that drops val from the validator set.
+func removeValidatorUpdate(val *types.Validator) types.EventDataValidatorSetUpdates {
+	return types.EventDataValidatorSetUpdates{
+		ValidatorUpdates: []*types.Validator{
+			{PubKey: val.PubKey, Address: val.Address, VotingPower: 0},
+		},
+	}
+}
+
+// addValidatorUpdate builds an update that puts val back into the validator set.
+func addValidatorUpdate(val *types.Validator) types.EventDataValidatorSetUpdates {
+	return types.EventDataValidatorSetUpdates{
+		ValidatorUpdates: []*types.Validator{
+			{PubKey: val.PubKey, Address: val.Address, BlsKey: val.BlsKey, VotingPower: 10},
+		},
+	}
+}
+
+// requireValidatorCount republishes update until the set reaches want. It
+// republishes because the pool may be mid-backoff, and it is bounded so a pool
+// that never applies the update fails the test rather than hanging it.
+func requireValidatorCount(t *testing.T, p *Pool, bus *types.EventBus, update types.EventDataValidatorSetUpdates, want int, msg string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_ = bus.PublishEventValidatorSetUpdates(update)
+		return p.validatorVerifier.lenOfValidators() == want
+	}, 15*time.Second, 200*time.Millisecond, msg)
+}
+
 func TestPool_AddVote(t *testing.T) {
 	pk1, val1, _, _, _, votePool := makeVotePool()
 
@@ -251,45 +280,17 @@ func TestPool_ValidatorSetUpdate(t *testing.T) {
 	pk1Bts, _ := pk1.Marshal()
 	secKey, _ := bls.UnmarshalPrivateKey(pk1Bts)
 
-	// remove validator 1
-	removeVal := types.Validator{PubKey: val1.PubKey, Address: val1.Address, VotingPower: 0}
-	validatorUpdates := []*types.Validator{
-		&removeVal,
-	}
-	validatorUpdateEvents := types.EventDataValidatorSetUpdates{
-		ValidatorUpdates: validatorUpdates,
-	}
-
-	err := eventBus.PublishEventValidatorSetUpdates(validatorUpdateEvents)
-	require.NoError(t, err)
-	// resend the same validator updates should be fine
-	for votePool.validatorVerifier.lenOfValidators() == 2 {
-		err = eventBus.PublishEventValidatorSetUpdates(validatorUpdateEvents)
-		require.NoError(t, err)
-		time.Sleep(200 * time.Millisecond)
-	}
+	// remove validator 1; resending the same update is expected to be harmless
+	requireValidatorCount(t, votePool, eventBus, removeValidatorUpdate(val1), 1,
+		"validator 1 was never removed from the set")
 
 	vote1, _, _ := makeValidVotes(secKey, val1)
-	err = votePool.AddVote(&vote1)
+	err := votePool.AddVote(&vote1)
 	require.Error(t, err, "vote is not from validators")
 
-	// add validator 1
-	addVal := types.Validator{PubKey: val1.PubKey, Address: val1.Address, BlsKey: val1.BlsKey, VotingPower: 10}
-	validatorUpdates = []*types.Validator{
-		&addVal,
-	}
-	validatorUpdateEvents = types.EventDataValidatorSetUpdates{
-		ValidatorUpdates: validatorUpdates,
-	}
-
-	err = eventBus.PublishEventValidatorSetUpdates(validatorUpdateEvents)
-	require.NoError(t, err)
-	// even resend the same validator updates should be fine
-	for votePool.validatorVerifier.lenOfValidators() == 1 {
-		err = eventBus.PublishEventValidatorSetUpdates(validatorUpdateEvents)
-		require.NoError(t, err)
-		time.Sleep(200 * time.Millisecond)
-	}
+	// add validator 1 back
+	requireValidatorCount(t, votePool, eventBus, addValidatorUpdate(val1), 2,
+		"validator 1 was never added back to the set")
 
 	err = votePool.AddVote(&vote1)
 	require.NoError(t, err)
@@ -360,4 +361,62 @@ func TestVoteStore_PruneKeepsReinsertedVote(t *testing.T) {
 	got := store.getVotesByEventHash(eventHash)
 	require.Len(t, got, 1, "the live re-inserted vote must survive pruning of the stale entry")
 	require.Same(t, fresh, got[0], "the surviving vote must be the re-inserted one, not the expired one")
+}
+
+// A canceled subscription must be recovered from: pubsub cancels it wholesale
+// on buffer overflow, and returning there freezes the validator set.
+func TestPool_ResubscribesAfterSubscriptionCanceled(t *testing.T) {
+	_, val1, _, _, eventBus, votePool := makeVotePool()
+	t.Cleanup(func() { _ = votePool.Stop(); _ = eventBus.Stop() })
+
+	require.Equal(t, 2, votePool.validatorVerifier.lenOfValidators())
+
+	// Cancel it as an overflow would. Retried because the routine subscribes
+	// asynchronously; success also proves there was a subscription to cancel.
+	require.Eventually(t, func() bool {
+		return eventBus.Unsubscribe(
+			context.Background(), votePoolSubscriber, types.EventQueryValidatorSetUpdates) == nil
+	}, 5*time.Second, 50*time.Millisecond, "pool never subscribed to validator updates")
+
+	requireValidatorCount(t, votePool, eventBus, removeValidatorUpdate(val1), 1,
+		"validator updates stopped being applied after the subscription was canceled")
+}
+
+// Stopping the pool must release its event-bus client, or a pool restarted on
+// the same bus hits ErrAlreadySubscribed and silently stops seeing updates.
+func TestPool_RestartStillReceivesValidatorUpdates(t *testing.T) {
+	_, val1, _, val2, eventBus, first := makeVotePool()
+	t.Cleanup(func() { _ = eventBus.Stop() })
+
+	// Wait until it is demonstrably subscribed; otherwise it is stopped before
+	// registering and the assertion below passes for the wrong reason.
+	requireValidatorCount(t, first, eventBus, removeValidatorUpdate(val2), 1,
+		"first pool never applied a validator update, so it was never subscribed")
+
+	require.NoError(t, first.Stop())
+
+	second := NewVotePool(log.TestingLogger(), []*types.Validator{val1, val2}, eventBus)
+	require.NoError(t, second.Start())
+	t.Cleanup(func() { _ = second.Stop() })
+
+	requireValidatorCount(t, second, eventBus, removeValidatorUpdate(val1), 1,
+		"restarted pool never applied a validator update -- the previous pool's subscription was not released")
+}
+
+// A payload of an unexpected type published under the validator-update query
+// must not take the routine down with it.
+func TestPool_UnexpectedValidatorUpdatePayloadDoesNotStopUpdates(t *testing.T) {
+	_, val1, _, _, eventBus, votePool := makeVotePool()
+	t.Cleanup(func() { _ = votePool.Stop(); _ = eventBus.Stop() })
+
+	// Wait until subscribed; published earlier the bad payload is never
+	// delivered and the test passes without exercising anything.
+	requireValidatorCount(t, votePool, eventBus, removeValidatorUpdate(val1), 1,
+		"pool never applied a validator update, so it was never subscribed")
+
+	require.NoError(t, eventBus.Publish(
+		types.EventValidatorSetUpdates, types.EventDataString("unexpected payload")))
+
+	requireValidatorCount(t, votePool, eventBus, addValidatorUpdate(val1), 2,
+		"validator updates stopped after an unexpected payload was published")
 }

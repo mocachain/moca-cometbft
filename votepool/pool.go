@@ -3,6 +3,7 @@ package votepool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/cometbft/cometbft/libs/log"
 
+	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
 	"github.com/cometbft/cometbft/libs/sync"
 	"github.com/cometbft/cometbft/types"
 )
@@ -36,6 +38,13 @@ const (
 
 	// The event type of adding new votes to the Pool successfully.
 	eventBusVotePoolUpdates = "votePoolUpdates"
+
+	// Event bus client ID used for the validator-update subscription.
+	votePoolSubscriber = "VotePoolService"
+
+	// Pause between subscribe attempts, so a persistently failing
+	// subscription cannot spin the routine.
+	resubscribeBackoff = time.Second
 )
 
 // voteStore stores one type of votes.
@@ -204,6 +213,12 @@ func (p *Pool) OnStart() error {
 func (p *Pool) OnStop() {
 	p.BaseService.OnStop()
 	p.ticker.Stop()
+	// Leaving the client registered makes a restarted pool hit
+	// ErrAlreadySubscribed. NotFound is expected after a cancellation.
+	if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
+		!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
+		p.Logger.Error("Cannot unsubscribe from event bus", "err", err.Error())
+	}
 }
 
 // AddVote implements VotePool.
@@ -272,38 +287,102 @@ func (p *Pool) FlushVotes() {
 	p.negCache.Purge()
 }
 
-// validatorUpdateRoutine will sync validator updates.
+// validatorUpdateRoutine syncs validator updates, resubscribing when the
+// subscription is canceled -- pubsub cancels it wholesale on buffer overflow,
+// and returning would freeze the validator set for the life of the process.
 func (p *Pool) validatorUpdateRoutine() {
-	if !p.IsRunning() || !p.eventBus.IsRunning() {
-		return
+	// Release the client here, not just in OnStop: OnStop can run before this
+	// routine subscribes, leaving the later Subscribe registered forever. The
+	// client ID is constant, so on a bus shared by several pools this drops
+	// theirs too; a node runs one pool, and others recover via the loop below.
+	defer func() {
+		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
+			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
+			p.Logger.Error("Cannot unsubscribe on exit", "err", err.Error())
+		}
+	}()
+
+	for {
+		if !p.IsRunning() || !p.eventBus.IsRunning() {
+			return
+		}
+		sub, err := p.eventBus.Subscribe(context.Background(), votePoolSubscriber, types.EventQueryValidatorSetUpdates, eventBusSubscribeCap)
+		if err != nil {
+			// Recoverable -- e.g. a predecessor still releasing the same client
+			// ID. Exiting would freeze the validator set, so retry.
+			p.Logger.Error("Cannot subscribe to validator set update event; retrying", "err", err.Error())
+			if !p.waitBeforeRetry() {
+				return
+			}
+			continue
+		}
+		if resubscribe := p.consumeValidatorUpdates(sub); !resubscribe {
+			return
+		}
+		p.Logger.Error("Validator update subscription canceled; resubscribing")
+		// NotFound is expected -- pubsub removes a subscription before canceling
+		// it. Nothing here warrants exiting: a survivor resurfaces as
+		// ErrAlreadySubscribed on the next Subscribe, which already retries.
+		if err := p.eventBus.UnsubscribeAll(context.Background(), votePoolSubscriber); err != nil &&
+			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
+			p.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
+		}
+		if !p.waitBeforeRetry() {
+			return
+		}
 	}
-	sub, err := p.eventBus.Subscribe(context.Background(), "VotePoolService", types.EventQueryValidatorSetUpdates, eventBusSubscribeCap)
-	if err != nil {
-		p.Logger.Error("Cannot subscribe to validator set update event", "err", err.Error())
-		return
+}
+
+// waitBeforeRetry pauses before another subscribe attempt, staying responsive to
+// shutdown. It reports whether the caller should keep going.
+func (p *Pool) waitBeforeRetry() bool {
+	select {
+	case <-time.After(resubscribeBackoff):
+		return true
+	case <-p.Quit():
+		return false
 	}
+}
+
+// consumeValidatorUpdates drains a subscription, reporting whether the caller
+// should resubscribe (true) or shut down (false).
+func (p *Pool) consumeValidatorUpdates(sub types.Subscription) bool {
 	for {
 		select {
 		case validatorData := <-sub.Out():
-			changes := validatorData.Data().(types.EventDataValidatorSetUpdates)
-			p.validatorVerifier.updateValidators(changes.ValidatorUpdates)
+			// Two-return form: another payload type would otherwise panic.
+			changes, ok := validatorData.Data().(types.EventDataValidatorSetUpdates)
+			if !ok {
+				p.Logger.Error("Unexpected payload on validator set update event",
+					"type", fmt.Sprintf("%T", validatorData.Data()))
+				continue
+			}
+			if err := p.validatorVerifier.updateValidators(changes.ValidatorUpdates); err != nil {
+				p.Logger.Error("Validator set update applied with errors", "err", err.Error())
+			}
 			p.Logger.Info("Validators updated", "changes", changes.ValidatorUpdates)
 		case <-sub.Canceled():
-			return
+			return true
 		case <-p.Quit():
-			return
+			return false
 		}
 	}
 }
 
 // pruneVoteRoutine will prune votes at the given intervals.
 func (p *Pool) pruneVoteRoutine() {
-	for range p.ticker.C {
-		for _, s := range p.stores {
-			keys := s.pruneVotes()
-			for _, key := range keys {
-				p.cache.Remove(key)
+	for {
+		select {
+		case <-p.ticker.C:
+			for _, s := range p.stores {
+				keys := s.pruneVotes()
+				for _, key := range keys {
+					p.cache.Remove(key)
+				}
 			}
+		// Ranging over the ticker alone leaked this goroutine on every stop.
+		case <-p.Quit():
+			return
 		}
 	}
 }
