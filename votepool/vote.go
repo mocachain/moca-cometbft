@@ -41,8 +41,12 @@ func NewVote(pubKey, signature []byte, eventType uint8, eventHash []byte) *Vote 
 }
 
 // Key is used as an identifier of a vote, it is usually used as the key of map of cache.
+//
+// EventType is part of the key because the Pool's dedup cache is shared across
+// every event-type store: without it, a vote recorded under one event type
+// suppresses a different vote that happens to share (EventHash, PubKey).
 func (v *Vote) Key() string {
-	return string(v.EventHash[:]) + string(v.PubKey[:])
+	return string([]byte{byte(v.EventType)}) + string(v.EventHash[:]) + string(v.PubKey[:])
 }
 
 // ValidateBasic does basic validation of vote.

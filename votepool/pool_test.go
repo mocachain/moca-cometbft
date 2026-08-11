@@ -420,3 +420,42 @@ func TestPool_UnexpectedValidatorUpdatePayloadDoesNotStopUpdates(t *testing.T) {
 	requireValidatorCount(t, votePool, eventBus, addValidatorUpdate(val1), 2,
 		"validator updates stopped after an unexpected payload was published")
 }
+
+// The Pool keeps a separate store per event type but a single dedup cache
+// keyed on Vote.Key(). If that key omits the event type, the first vote to
+// arrive for a given (EventHash, PubKey) claims the cache entry and every
+// later vote sharing that pair is dropped as a duplicate before it reaches
+// its own store -- even though the two are distinct votes in distinct stores.
+//
+// The signature covers only EventHash, so the same signature is valid under
+// any event type and this is reachable without any key material.
+func TestPool_VotesWithSameHashDifferentEventTypeBothStored(t *testing.T) {
+	pk1, val1, _, _, _, votePool := makeVotePool()
+	pk1Bts, _ := pk1.Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(pk1Bts)
+
+	eventHash := common.HexToHash("0x9a1c7e4b2d5f8a0c3e6b9d2f5a8c1e4b7d0a3f6c9b2e5d8a1c4f7b0e3d6a9c2f").Bytes()
+	sign, _ := secKey.Sign(eventHash, DST)
+	signBts, _ := sign.Marshal()
+
+	first := Vote{
+		PubKey:    val1.BlsKey,
+		Signature: signBts,
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	second := first
+	second.EventType = DataAvailabilityChallengeEvent
+
+	require.NoError(t, votePool.AddVote(&first))
+	require.NoError(t, votePool.AddVote(&second))
+
+	got, err := votePool.GetVotesByEventTypeAndHash(FromBscCrossChainEvent, eventHash)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "vote must be stored under its own event type")
+
+	got, err = votePool.GetVotesByEventTypeAndHash(DataAvailabilityChallengeEvent, eventHash)
+	require.NoError(t, err)
+	require.Len(t, got, 1,
+		"a vote sharing (EventHash, PubKey) with another event type must not be dropped as a duplicate")
+}
