@@ -19,6 +19,12 @@
 
 ### BUG FIXES
 
+- `[votepool]` resubscribe the per-peer vote-gossip goroutine after its
+  subscription is canceled, and use `TrySend` instead of a blocking `Send`, so a
+  slow peer can no longer wedge itself off vote gossip for the life of the
+  connection
+- `[rpc]` rate-limit the `broadcast_vote` endpoint so an unauthenticated client
+  cannot force unbounded BLS verification work
 - `[votepool]` include the event type in the vote dedup key, so a vote recorded
   under one event type no longer suppresses a different vote that shares its
   `(EventHash, PubKey)`
