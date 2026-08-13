@@ -19,6 +19,9 @@
 
 ### BUG FIXES
 
+- `[mempool]` bound the async reactor's recv/checkTx queue depth (was 204800), so
+  a single peer or unauthenticated RPC broadcaster can no longer buffer enough
+  in-flight batches to exhaust process memory before backpressure applies
 - `[votepool]` include the event type in the vote dedup key, so a vote recorded
   under one event type no longer suppresses a different vote that shares its
   `(EventHash, PubKey)`

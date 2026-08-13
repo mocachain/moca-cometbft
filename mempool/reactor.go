@@ -16,7 +16,10 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-var MempoolPacketChannelSize = 1024 * 200 // 200K messages can be queued
+// MempoolPacketChannelSize bounds the async recv/checkTx queues. Memory is depth
+// x max envelope, so keep it small enough that the blocking receive backpressures
+// before a peer can exhaust memory; the serial drain needs no more.
+var MempoolPacketChannelSize = 1024
 
 // Reactor implements MsgBytesFilter
 var _ p2p.MsgBytesFilter = (*Reactor)(nil)
