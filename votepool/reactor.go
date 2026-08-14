@@ -2,12 +2,14 @@ package votepool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
 
 	"github.com/cometbft/cometbft/libs/log"
+	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/p2p/conn"
 	"github.com/cometbft/cometbft/proto/tendermint/votepool"
@@ -152,23 +154,53 @@ func (voteR *Reactor) Receive(e p2p.Envelope) {
 
 // broadcastVotes routine will broadcast votes to peers.
 func (voteR *Reactor) broadcastVotes(peer p2p.Peer) {
-	if !voteR.IsRunning() || !peer.IsRunning() {
-		return
-	}
-	sub, err := voteR.eventBus.Subscribe(context.Background(), string(peer.ID()), eventVotePoolAdded, eventBusSubscribeCap)
-	if err != nil {
-		voteR.Logger.Error("Cannot subscribe to vote update event", "err", err.Error())
-		return
-	}
 	cache, ok := peer.Get(peerVoteCacheKey).(*lru.Cache)
 	if !ok { // this should not happen
 		voteR.Logger.Error(fmt.Sprintf("Peer %v has no cache state", peer))
 		return
 	}
 	for {
+		if !voteR.IsRunning() || !peer.IsRunning() {
+			return
+		}
+		sub, err := voteR.eventBus.Subscribe(context.Background(), string(peer.ID()), eventVotePoolAdded, eventBusSubscribeCap)
+		if err != nil {
+			// Recoverable; exiting would wedge this peer off vote gossip until it
+			// reconnects, so back off and retry.
+			voteR.Logger.Error("Cannot subscribe to vote update event; retrying", "err", err.Error())
+			if !voteR.sleepBeforeResubscribe(peer) {
+				return
+			}
+			continue
+		}
+		if !voteR.consumePeerVotes(peer, cache, sub) {
+			return
+		}
+		// Canceled on buffer overflow (a slow peer): resubscribe instead of
+		// exiting, else vote gossip to this peer stops for the connection.
+		// NotFound is expected -- pubsub removes a canceled subscription.
+		if err := voteR.eventBus.Unsubscribe(context.Background(), string(peer.ID()), eventVotePoolAdded); err != nil &&
+			!errors.Is(err, cmtpubsub.ErrSubscriptionNotFound) {
+			voteR.Logger.Error("Cannot unsubscribe before resubscribing", "err", err.Error())
+		}
+		if !voteR.sleepBeforeResubscribe(peer) {
+			return
+		}
+	}
+}
+
+// consumePeerVotes forwards pool votes to peer until the subscription is canceled
+// (returns true -> resubscribe) or the reactor/peer stops (returns false).
+func (voteR *Reactor) consumePeerVotes(peer p2p.Peer, cache *lru.Cache, sub types.Subscription) bool {
+	for {
 		select {
 		case voteData := <-sub.Out():
-			vote := voteData.Data().(Vote)
+			// Two-return form: an unexpected payload would otherwise panic.
+			vote, ok := voteData.Data().(Vote)
+			if !ok {
+				voteR.Logger.Error("Unexpected payload on vote update event", "type", fmt.Sprintf("%T", voteData.Data()))
+				continue
+			}
 			// send votes to remote peer, if
 			// 1) it did not receive the vote from the remote peer, or,
 			// 2) the vote is received earlier than `time.Now() - cacheTimeout`
@@ -182,7 +214,9 @@ func (voteR *Reactor) broadcastVotes(peer p2p.Peer) {
 				}
 			}
 			if needToSend {
-				_ = peer.Send(p2p.Envelope{
+				// TrySend, not blocking Send: a slow peer must not stall this
+				// goroutine into a buffer overflow. Dropped votes are re-gossiped.
+				if peer.TrySend(p2p.Envelope{
 					ChannelID: VotePoolChannel,
 					Message: &votepool.Vote{
 						PubKey:    vote.PubKey,
@@ -190,15 +224,29 @@ func (voteR *Reactor) broadcastVotes(peer p2p.Peer) {
 						EventType: uint32(vote.EventType),
 						EventHash: vote.EventHash,
 					},
-				})
-				voteR.Logger.Debug("Sent vote to", "peer", peer, "vote", vote.Key())
+				}) {
+					voteR.Logger.Debug("Sent vote to", "peer", peer, "vote", vote.Key())
+				}
 			}
 		case <-sub.Canceled():
-			return
+			return true
 		case <-voteR.Quit():
-			return
+			return false
 		case <-peer.Quit():
-			return
+			return false
 		}
+	}
+}
+
+// sleepBeforeResubscribe pauses before another subscribe attempt, staying
+// responsive to reactor and peer shutdown. Reports whether to keep going.
+func (voteR *Reactor) sleepBeforeResubscribe(peer p2p.Peer) bool {
+	select {
+	case <-time.After(resubscribeBackoff):
+		return true
+	case <-voteR.Quit():
+		return false
+	case <-peer.Quit():
+		return false
 	}
 }
