@@ -2,6 +2,7 @@ package votepool
 
 import (
 	"bytes"
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -152,4 +153,35 @@ func waitForVoteOnReactor(t *testing.T, eventHash []byte, r *Reactor) {
 			break
 		}
 	}
+}
+
+// TestReactorResubscribesAfterCancel: after a peer's subscription is canceled,
+// a later vote must still reach the peer (the reactor resubscribes rather than
+// exiting). Fails against the pre-change reactor (times out on the second vote).
+func TestReactorResubscribesAfterCancel(t *testing.T) {
+	config := cfg.TestConfig()
+	pks, vals, eventBuses, pools, reactors := makeAndConnectReactors(config, 2)
+
+	pks0Bts, _ := pks[0].Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(pks0Bts)
+	mkVote := func(hashHex string) Vote {
+		h := common.HexToHash(hashHex).Bytes()
+		return Vote{PubKey: vals[0].BlsKey, Signature: signVote(secKey, testEventType, h), EventType: testEventType, EventHash: h}
+	}
+
+	// 1) gossip works initially: reactor[1] receives reactor[0]'s vote.
+	v1 := mkVote("0x1111111111111111111111111111111111111111111111111111111111111111")
+	require.NoError(t, pools[0].AddVote(&v1))
+	waitVotesReceived(t, reactors, v1.EventHash)
+
+	// 2) cancel reactor[0]'s subscription for its peer (as a buffer overflow would).
+	peers := reactors[0].Switch.Peers().List()
+	require.NotEmpty(t, peers)
+	require.NoError(t, eventBuses[0].Unsubscribe(context.Background(), string(peers[0].ID()), eventVotePoolAdded))
+
+	// 3) after the resubscribe backoff, a new vote must still reach reactor[1].
+	time.Sleep(resubscribeBackoff + 500*time.Millisecond)
+	v2 := mkVote("0x2222222222222222222222222222222222222222222222222222222222222222")
+	require.NoError(t, pools[0].AddVote(&v2))
+	waitVotesReceived(t, reactors, v2.EventHash)
 }
