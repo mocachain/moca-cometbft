@@ -81,7 +81,7 @@ type BlsSignatureVerifier struct {
 
 // Validate implements Verifier.
 func (b *BlsSignatureVerifier) Validate(vote *Vote) error {
-	valid := verifySignature(vote.EventHash, vote.PubKey, vote.Signature)
+	valid := verifySignature(vote.SignBytes(), vote.PubKey, vote.Signature)
 	if !valid {
 		return errors.New("invalid signature")
 	}

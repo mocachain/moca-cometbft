@@ -40,6 +40,18 @@ func NewVote(pubKey, signature []byte, eventType uint8, eventHash []byte) *Vote 
 	return &vote
 }
 
+// SignBytes returns the payload that a vote's BLS signature must cover.
+//
+// EventType is bound into the preimage so a signature produced for one event
+// type cannot be replayed as a valid vote under another. Without it, the same
+// (EventHash, PubKey) signature verifies in every bucket.
+func (v *Vote) SignBytes() []byte {
+	buf := make([]byte, 0, 1+len(v.EventHash))
+	buf = append(buf, byte(v.EventType))
+	buf = append(buf, v.EventHash...)
+	return crypto.Keccak256(buf)
+}
+
 // Key is used as an identifier of a vote, it is usually used as the key of map of cache.
 //
 // EventType is part of the key because the Pool's dedup cache is shared across

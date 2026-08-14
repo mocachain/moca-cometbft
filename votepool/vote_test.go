@@ -15,8 +15,7 @@ func TestVote_ValidateBasic(t *testing.T) {
 	eventHash := common.HexToHash("0xeefacfed87736ae1d8e8640f6fd7951862997782e5e79842557923e2779d5d5a").Bytes()
 	privKeyBts, _ := privKey.Marshal()
 	secKey, _ := bls.UnmarshalPrivateKey(privKeyBts)
-	sign, _ := secKey.Sign(eventHash, DST)
-	signBts, _ := sign.Marshal()
+	signBts := signVote(secKey, FromBscCrossChainEvent, eventHash)
 
 	testCases := []struct {
 		vote Vote

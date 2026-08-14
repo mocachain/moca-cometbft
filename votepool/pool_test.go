@@ -47,10 +47,18 @@ func makeVotePool() (*bls.PrivateKey, *types.Validator, *bls.PrivateKey, *types.
 	return blsPrivKey1, val1, blsPrivKey2, val2, eventBus, votePool
 }
 
+// signVote signs the vote preimage (EventType||EventHash) that BlsSignatureVerifier
+// checks, so tests exercise the same binding production signers must use.
+func signVote(secKey *bls.PrivateKey, eventType EventType, eventHash []byte) []byte {
+	v := Vote{EventType: eventType, EventHash: eventHash}
+	sig, _ := secKey.Sign(v.SignBytes(), DST)
+	b, _ := sig.Marshal()
+	return b
+}
+
 func makeValidVotes(secKey *bls.PrivateKey, val1 *types.Validator) (Vote, Vote, Vote) {
 	eventHash1 := common.HexToHash("0xeefacfed87736ae1d8e8640f6fd7951862997782e5e79842557923e2779d5d5a").Bytes()
-	sign1, _ := secKey.Sign(eventHash1, DST)
-	sign1Bts, _ := sign1.Marshal()
+	sign1Bts := signVote(secKey, FromBscCrossChainEvent, eventHash1)
 	vote1 := Vote{
 		PubKey:    val1.BlsKey,
 		Signature: sign1Bts,
@@ -59,8 +67,7 @@ func makeValidVotes(secKey *bls.PrivateKey, val1 *types.Validator) (Vote, Vote, 
 	}
 
 	eventHash2 := common.HexToHash("0x7e19be15d0d524a1ca5e39be503d18584c23426920bdc23b159c37a2341913d0").Bytes()
-	sign2, _ := secKey.Sign(eventHash2, DST)
-	sign2Bts, _ := sign2.Marshal()
+	sign2Bts := signVote(secKey, ToBscCrossChainEvent, eventHash2)
 	vote2 := Vote{
 		PubKey:    val1.BlsKey,
 		Signature: sign2Bts,
@@ -69,8 +76,7 @@ func makeValidVotes(secKey *bls.PrivateKey, val1 *types.Validator) (Vote, Vote, 
 	}
 
 	eventHash3 := common.HexToHash("0xb941130c8d3508f642aba83db420f9cef6a6ebb7f869e3cef06f276bdcf205a9").Bytes()
-	sign3, _ := secKey.Sign(eventHash3, DST)
-	sign3Bts, _ := sign3.Marshal()
+	sign3Bts := signVote(secKey, FromBscCrossChainEvent, eventHash3)
 	vote3 := Vote{
 		PubKey:    val1.BlsKey,
 		Signature: sign3Bts,
@@ -115,16 +121,14 @@ func TestPool_AddVote(t *testing.T) {
 	eventHash := common.HexToHash("0xeefacfed87736ae1d8e8640f6fd7951862997782e5e79842557923e2779d5d5a").Bytes()
 	pk1Bts, _ := pk1.Marshal()
 	secKey, _ := bls.UnmarshalPrivateKey(pk1Bts)
-	sign, _ := secKey.Sign(eventHash, DST)
-	signBts, _ := sign.Marshal()
+	signBts := signVote(secKey, FromBscCrossChainEvent, eventHash)
 
 	anotherEventHash := common.HexToHash("0x7e19be15d0d524a1ca5e39be503d18584c23426920bdc23b159c37a2341913d0").Bytes()
 	blsPrivKey, _ := bls.GenerateBlsKey()
 	blsPubKey := blsPrivKey.PublicKey().Marshal()
 	blsPrivKeyBts, _ := blsPrivKey.Marshal()
 	blsSecKey, _ := bls.UnmarshalPrivateKey(blsPrivKeyBts)
-	anotherSign, _ := blsSecKey.Sign(anotherEventHash, DST)
-	anotherSignBts, _ := anotherSign.Marshal()
+	anotherSignBts := signVote(blsSecKey, FromBscCrossChainEvent, anotherEventHash)
 
 	testCases := []struct {
 		vote Vote
@@ -326,7 +330,7 @@ func TestPool_NegativeCacheSkipsRepeatBlsVerification(t *testing.T) {
 	// the negative cache keys on the signature, not just the vote identity.
 	good := &Vote{
 		PubKey:    val1.BlsKey,
-		Signature: func() []byte { sig, _ := secKey.Sign(eventHash, DST); b, _ := sig.Marshal(); return b }(),
+		Signature: signVote(secKey, FromBscCrossChainEvent, eventHash),
 		EventType: FromBscCrossChainEvent,
 		EventHash: eventHash,
 	}
@@ -435,20 +439,30 @@ func TestPool_VotesWithSameHashDifferentEventTypeBothStored(t *testing.T) {
 	secKey, _ := bls.UnmarshalPrivateKey(pk1Bts)
 
 	eventHash := common.HexToHash("0x9a1c7e4b2d5f8a0c3e6b9d2f5a8c1e4b7d0a3f6c9b2e5d8a1c4f7b0e3d6a9c2f").Bytes()
-	sign, _ := secKey.Sign(eventHash, DST)
-	signBts, _ := sign.Marshal()
 
 	first := Vote{
 		PubKey:    val1.BlsKey,
-		Signature: signBts,
+		Signature: signVote(secKey, FromBscCrossChainEvent, eventHash),
 		EventType: FromBscCrossChainEvent,
 		EventHash: eventHash,
 	}
-	second := first
-	second.EventType = DataAvailabilityChallengeEvent
+	// Same event and key, but signed for its own type: a legitimate second vote.
+	second := Vote{
+		PubKey:    val1.BlsKey,
+		Signature: signVote(secKey, DataAvailabilityChallengeEvent, eventHash),
+		EventType: DataAvailabilityChallengeEvent,
+		EventHash: eventHash,
+	}
 
 	require.NoError(t, votePool.AddVote(&first))
 	require.NoError(t, votePool.AddVote(&second))
+
+	// Replaying first's signature under another event type must now fail: the
+	// preimage covers the type, so the signature does not carry across.
+	replayed := first
+	replayed.EventType = ToBscCrossChainEvent
+	require.Error(t, votePool.AddVote(&replayed),
+		"a signature made for one event type must not verify under another")
 
 	got, err := votePool.GetVotesByEventTypeAndHash(FromBscCrossChainEvent, eventHash)
 	require.NoError(t, err)

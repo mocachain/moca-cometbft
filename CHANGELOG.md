@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### BREAKING CHANGES
+
+- `[votepool]` bind the event type into the vote signature preimage: BLS
+  signatures are now made and verified over `keccak256(EventType || EventHash)`
+  rather than `EventHash` alone. Signers must be updated in step with the chain
+  and the challengers — see the PR for the rollout order
+  ([\#25](https://github.com/mocachain/moca-cometbft/pull/25))
+
 ### IMPROVEMENTS
 
 - `[votepool]` give the vote gossip channel an explicit `SendQueueCapacity`,
