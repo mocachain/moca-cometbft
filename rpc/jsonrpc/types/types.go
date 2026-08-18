@@ -2,14 +2,52 @@ package types
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	cmtjson "github.com/cometbft/cometbft/libs/json"
 )
+
+// Supported EVM json-rpc requests
+const (
+	EthBlockNumber         = "eth_blockNumber"
+	EthGetBlockByNumber    = "eth_getBlockByNumber"
+	EthGetBalance          = "eth_getBalance"
+	EthChainID             = "eth_chainId"
+	NetVersion             = "net_version"
+	EthNetworkID           = "eth_networkId"
+	EthGetCode             = "eth_getCode"
+	EthGasPrice            = "eth_gasPrice"
+	EthEstimateGas         = "eth_estimateGas"
+	EthCall                = "eth_call"
+	EthGetTransactionCount = "eth_getTransactionCount"
+	EthSendRawTransaction  = "eth_sendRawTransaction"
+)
+
+var SupportedEthQueryRequests = []string{
+	EthBlockNumber,
+	EthGetBlockByNumber,
+	EthGetBalance,
+	EthChainID,
+	NetVersion,
+	EthNetworkID,
+	EthGetCode,
+	EthGasPrice,
+	EthEstimateGas,
+	EthCall,
+	EthGetTransactionCount,
+	EthSendRawTransaction,
+}
 
 // a wrapper to emulate a sum type: jsonrpcid = string | int
 // TODO: refactor when Go 2.0 arrives https://github.com/golang/go/issues/19412
@@ -199,6 +237,92 @@ func NewRPCSuccessResponse(id jsonrpcid, res interface{}) RPCResponse {
 	return RPCResponse{JSONRPC: "2.0", ID: id, Result: rawMsg}
 }
 
+func NewEthRPCSuccessResponse(id jsonrpcid, res interface{}, method string) RPCResponse {
+	var rawMsg json.RawMessage
+
+	var result []byte
+	if res != nil {
+		var js []byte
+		js, err := cmtjson.Marshal(res)
+		if err != nil {
+			return RPCInternalError(id, fmt.Errorf("error marshaling response: %w", err))
+		}
+		rawMsg = json.RawMessage(js)
+
+		var v interface{}
+		err = json.Unmarshal(rawMsg, &v)
+		if err != nil {
+			return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+		}
+
+		// remove the nested structs and convert from base64 to hex string
+		ethResponse := v.(map[string]interface{})["response"]
+		response := ethResponse.(map[string]interface{})["response"]
+		bz, err := base64.StdEncoding.DecodeString(response.(string))
+		if err != nil {
+			return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+		}
+		if len(bz) == 0 {
+			bz = []byte{0x0}
+		}
+
+		switch method {
+		// return hex string for eth_blockNumber, eth_networkId, eth_getBalance
+		case EthBlockNumber, EthNetworkID, EthGetBalance:
+			result, err = json.Marshal("0x" + hex.EncodeToString(bz))
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+		// return hex string for eth_chainId
+		case EthChainID:
+			// metamask do not support the Hex signed 2's complement, need to trim the prefix `0`
+			chainIDStr := strings.TrimLeft(hex.EncodeToString(bz), "0")
+			result, err = json.Marshal("0x" + chainIDStr)
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+		// return hex string for EthGasPrice, EthCall, EthGetCode, EthGetTransactionCount, EthEstimateGas
+		case EthGasPrice, EthCall, EthGetCode, EthGetTransactionCount, EthEstimateGas:
+			// metamask do not support the Hex signed 2's complement, need to trim the prefix `0`
+			resultStr := strings.TrimLeft(hex.EncodeToString(bz), "0")
+			result, err = json.Marshal("0x" + resultStr)
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+		case EthSendRawTransaction:
+			return RPCInvalidRequestError(id, fmt.Errorf("transfer amoca through EVM wallet on MOCA is not available yet, please go to decellar.io or refer to latest docs"))
+		//return int string for net_version
+		case NetVersion:
+			hexStr := hex.EncodeToString(bz)
+			netVersion, err := strconv.ParseInt(hexStr, 16, 64)
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+			result, err = json.Marshal(strconv.FormatInt(netVersion, 10))
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+		case EthGetBlockByNumber:
+			hexStr := hex.EncodeToString(bz)
+			height, err := strconv.ParseInt(hexStr, 16, 64)
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+			block := formatBlock(height)
+			result, err = json.Marshal(block)
+			if err != nil {
+				return RPCInternalError(id, fmt.Errorf("error decode response: %w", err))
+			}
+		default:
+			panic("unknown method")
+		}
+	} else {
+		panic("empty response")
+	}
+
+	return RPCResponse{JSONRPC: "2.0", ID: id, Result: result}
+}
+
 func NewRPCErrorResponse(id jsonrpcid, code int, msg, data string) RPCResponse {
 	return RPCResponse{
 		JSONRPC: "2.0",
@@ -324,4 +448,36 @@ func SocketType(listenAddr string) string {
 		socketType = "tcp"
 	}
 	return socketType
+}
+
+func formatBlock(height int64) map[string]interface{} {
+	emptyHash := common.Hash{}
+	emptyAddress := common.Address{}
+	emptyNonce := [8]byte{}
+	emptyLogsBloom := [256]byte{}
+
+	result := map[string]interface{}{
+		"number":           hexutil.Uint64(height),
+		"hash":             emptyHash,
+		"parentHash":       emptyHash,
+		"nonce":            fmt.Sprintf("%x", emptyNonce),
+		"sha3Uncles":       emptyHash,
+		"logsBloom":        fmt.Sprintf("%x", emptyLogsBloom),
+		"stateRoot":        emptyHash,
+		"miner":            emptyAddress,
+		"mixHash":          emptyHash,
+		"difficulty":       (*hexutil.Big)(big.NewInt(0)),
+		"extraData":        "0x",
+		"size":             hexutil.Uint64(0),
+		"gasLimit":         hexutil.Uint64(0),
+		"gasUsed":          (*hexutil.Big)(big.NewInt(0)),
+		"timestamp":        hexutil.Uint64(0),
+		"transactionsRoot": emptyHash,
+		"receiptsRoot":     emptyHash,
+
+		"uncles":          []common.Hash{},
+		"transactions":    []interface{}{},
+		"totalDifficulty": (*hexutil.Big)(big.NewInt(0)),
+	}
+	return result
 }

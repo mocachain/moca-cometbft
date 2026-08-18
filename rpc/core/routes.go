@@ -55,6 +55,9 @@ func (env *Environment) GetRoutes() RoutesMap {
 		// vote pool API
 		"broadcast_vote": rpc.NewRPCFunc(env.BroadcastVote, "vote"),
 		"query_vote":     rpc.NewRPCFunc(env.QueryVote, "event_type,event_hash"),
+
+		// EVM json-rpc API
+		"eth_query": rpc.NewRPCFunc(env.EthQuery, "request"),
 	}
 }
 

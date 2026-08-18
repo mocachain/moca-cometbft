@@ -187,6 +187,96 @@ func (_m *Client) Error() error {
 	return r0
 }
 
+// EthQuery provides a mock function with given fields: _a0, _a1
+func (_m *Client) EthQuery(_a0 context.Context, _a1 *types.RequestEthQuery) (*types.ResponseEthQuery, error) {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EthQuery")
+	}
+
+	var r0 *types.ResponseEthQuery
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *types.RequestEthQuery) (*types.ResponseEthQuery, error)); ok {
+		return rf(_a0, _a1)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *types.RequestEthQuery) *types.ResponseEthQuery); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*types.ResponseEthQuery)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *types.RequestEthQuery) error); ok {
+		r1 = rf(_a0, _a1)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// EthQueryAsync provides a mock function with given fields: _a0, _a1
+func (_m *Client) EthQueryAsync(_a0 context.Context, _a1 *types.RequestEthQuery) (*abcicli.ReqRes, error) {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EthQueryAsync")
+	}
+
+	var r0 *abcicli.ReqRes
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *types.RequestEthQuery) (*abcicli.ReqRes, error)); ok {
+		return rf(_a0, _a1)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *types.RequestEthQuery) *abcicli.ReqRes); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*abcicli.ReqRes)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *types.RequestEthQuery) error); ok {
+		r1 = rf(_a0, _a1)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// EthQuerySync provides a mock function with given fields: _a0, _a1
+func (_m *Client) EthQuerySync(_a0 context.Context, _a1 *types.RequestEthQuery) (*types.ResponseEthQuery, error) {
+	ret := _m.Called(_a0, _a1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for EthQuerySync")
+	}
+
+	var r0 *types.ResponseEthQuery
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *types.RequestEthQuery) (*types.ResponseEthQuery, error)); ok {
+		return rf(_a0, _a1)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *types.RequestEthQuery) *types.ResponseEthQuery); ok {
+		r0 = rf(_a0, _a1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*types.ResponseEthQuery)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, *types.RequestEthQuery) error); ok {
+		r1 = rf(_a0, _a1)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
 // ExtendVote provides a mock function with given fields: _a0, _a1
 func (_m *Client) ExtendVote(_a0 context.Context, _a1 *types.RequestExtendVote) (*types.ResponseExtendVote, error) {
 	ret := _m.Called(_a0, _a1)
