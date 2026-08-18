@@ -4,6 +4,14 @@
 
 ### BREAKING CHANGES
 
+- `[abci,rpc]` restore the v1.3 `eth_query` ABCI surface: the
+  `RequestEthQuery`/`ResponseEthQuery` messages (oneof arms 21/22, matching the
+  v1.3 field numbers), the dedicated `eth_query` proxy connection, the
+  `eth_query` RPC route and the eth-flavored JSON-RPC request fallback and
+  response shaping, so a v1.3-based chain builds and serves wallet queries
+  unchanged. `abci/types.Application` gains an `EthQuery` method — embedders of
+  `BaseApplication` are unaffected
+  ([\#34](https://github.com/mocachain/moca-cometbft/pull/34))
 - `[votepool]` bind the event type into the vote signature preimage: BLS
   signatures are now made and verified over `keccak256(EventType || EventHash)`
   rather than `EventHash` alone. Signers must be updated in step with the chain

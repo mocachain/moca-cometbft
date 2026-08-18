@@ -70,6 +70,9 @@ type Environment struct {
 	ProxyAppQuery   proxy.AppConnQuery
 	ProxyAppMempool proxy.AppConnMempool
 
+	// for EVM json-rpc call
+	ProxyAppEthQuery proxy.AppConnEthQuery
+
 	// interfaces defined in types and above
 	StateStore       sm.Store
 	BlockStore       sm.BlockStore

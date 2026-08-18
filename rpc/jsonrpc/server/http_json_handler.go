@@ -83,7 +83,43 @@ func makeJSONRPCHandler(funcMap map[string]*RPCFunc, logger log.Logger) http.Han
 			args := []reflect.Value{reflect.ValueOf(ctx)}
 			rpcFunc, ok := funcMap[request.Method]
 
-			if !ok || rpcFunc.ws {
+			if !ok {
+				// try eth_query
+				var isEthQuery bool
+				for _, method := range types.SupportedEthQueryRequests {
+					if method == request.Method {
+						isEthQuery = true
+						break
+					}
+				}
+				if !isEthQuery {
+					responses = append(responses, types.RPCMethodNotFoundError(request.ID))
+					cache = false
+					continue
+				}
+
+				rpcFunc = funcMap["eth_query"]
+				bz, err := json.Marshal(request)
+				if err != nil {
+					responses = append(responses, types.RPCInvalidRequestError(request.ID, err))
+					continue
+				}
+				args = append(args, reflect.ValueOf(bz))
+
+				if cache && !rpcFunc.cacheableWithArgs(args) {
+					cache = false
+				}
+
+				returns := rpcFunc.f.Call(args)
+				result, err := unreflectResult(returns)
+				if err != nil {
+					responses = append(responses, types.RPCInternalError(request.ID, err))
+					continue
+				}
+				responses = append(responses, types.NewEthRPCSuccessResponse(request.ID, result, request.Method))
+				continue
+			}
+			if rpcFunc.ws {
 				responses = append(responses, types.RPCMethodNotFoundError(request.ID))
 				cache = false
 				continue

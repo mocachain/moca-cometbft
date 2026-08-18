@@ -25,6 +25,8 @@ const (
 type Client interface {
 	service.Service
 	types.Application
+	EthQueryAsync(context.Context, *types.RequestEthQuery) (*ReqRes, error)
+	EthQuerySync(context.Context, *types.RequestEthQuery) (*types.ResponseEthQuery, error)
 
 	// TODO: remove as each method now returns an error
 	Error() error
