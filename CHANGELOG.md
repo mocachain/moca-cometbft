@@ -4,6 +4,9 @@
 
 ### BREAKING CHANGES
 
+- `[rpc/client]` remove the fork-only `rpc/client/http/v2` client, which
+  multiplexed every RPC call over the websocket connection and is not part of
+  upstream CometBFT; use `rpc/client/http` instead
 - `[votepool]` bind the event type into the vote signature preimage: BLS
   signatures are now made and verified over `keccak256(EventType || EventHash)`
   rather than `EventHash` alone. Signers must be updated in step with the chain
