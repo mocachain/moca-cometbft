@@ -22,6 +22,9 @@
 
 ### BUG FIXES
 
+- `[config]` reject a `mempool.size` or `mempool.max_txs_bytes` of `0` in
+  `ValidateBasic`, matching the existing negative-value check
+  ([\#38](https://github.com/mocachain/moca-cometbft/pull/38))
 - `[votepool]` resubscribe the per-peer vote-gossip goroutine after its
   subscription is canceled, and use `TrySend` instead of a blocking `Send`, so a
   slow peer can no longer wedge itself off vote gossip for the life of the
