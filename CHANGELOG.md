@@ -45,6 +45,10 @@
   updates; stop `pruneVoteRoutine` leaking a goroutine per start/stop cycle;
   and check the validator-update payload type before asserting it
   ([\#28](https://github.com/mocachain/moca-cometbft/pull/28))
+- `[votepool]` give each peer a bounded budget of votes that fail verification
+  per minute and disconnect it once the budget is spent, so the work one peer can
+  ask of the BLS verifier no longer depends only on how fast it can send; the
+  negative cache covers repeats of a signature, not a stream of fresh ones
 
 ### IMPROVEMENTS
 

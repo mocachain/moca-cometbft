@@ -3,6 +3,7 @@ package votepool
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/cometbft/cometbft/crypto/ed25519"
 	"github.com/cometbft/cometbft/libs/log"
 	"github.com/cometbft/cometbft/p2p"
+	votepoolproto "github.com/cometbft/cometbft/proto/tendermint/votepool"
 	"github.com/cometbft/cometbft/types"
 )
 
@@ -184,4 +186,109 @@ func TestReactorResubscribesAfterCancel(t *testing.T) {
 	v2 := mkVote("0x2222222222222222222222222222222222222222222222222222222222222222")
 	require.NoError(t, pools[0].AddVote(&v2))
 	waitVotesReceived(t, reactors, v2.EventHash)
+}
+
+// receiveVote hands msg to the reactor as if it had arrived from src.
+func receiveVote(r *Reactor, src p2p.Peer, v Vote) {
+	r.Receive(p2p.Envelope{
+		ChannelID: VotePoolChannel,
+		Src:       src,
+		Message: &votepoolproto.Vote{
+			PubKey:    v.PubKey,
+			Signature: v.Signature,
+			EventType: uint32(v.EventType),
+			EventHash: v.EventHash,
+		},
+	})
+}
+
+// TestReactorStopsPeerOverInvalidVoteBudget: every vote that fails verification
+// costs a BLS pairing, and the negative cache cannot absorb a stream of them --
+// each carries a fresh signature, so it never hits. A peer that spends its whole
+// budget inside the window is disconnected.
+func TestReactorStopsPeerOverInvalidVoteBudget(t *testing.T) {
+	config := cfg.TestConfig()
+	_, vals, _, _, reactors := makeAndConnectReactors(config, 2)
+
+	peers := reactors[0].Switch.Peers().List()
+	require.Len(t, peers, 1)
+	src := peers[0]
+
+	eventHash := common.HexToHash("0x2b7c4e1a8d5f0c3b6e9a2d5f8c1b4e7a0d3f6c9b2e5a8d1f4c7b0e3a6d9f2c5b").Bytes()
+	badVote := func(n int) Vote {
+		// A fresh signature every time, so the negative cache never short-circuits.
+		sig := make([]byte, signatureLen)
+		binary.BigEndian.PutUint64(sig, uint64(n)+1)
+		return Vote{PubKey: vals[0].BlsKey, Signature: sig, EventType: testEventType, EventHash: eventHash}
+	}
+
+	for i := 0; i < maxInvalidVotesPerPeer; i++ {
+		receiveVote(reactors[0], src, badVote(i))
+	}
+	require.Equal(t, 1, reactors[0].Switch.Peers().Size(),
+		"the peer must not be dropped while still inside its budget")
+
+	receiveVote(reactors[0], src, badVote(maxInvalidVotesPerPeer))
+	require.Eventually(t, func() bool { return reactors[0].Switch.Peers().Size() == 0 },
+		5*time.Second, 50*time.Millisecond,
+		"peer was never stopped after exceeding its invalid-vote budget")
+}
+
+// TestReactorKeepsPeerSendingBenignVotes: accepted votes, duplicates of them and
+// replays of an already-rejected signature are all free to detect, so none of
+// them may spend the budget.
+func TestReactorKeepsPeerSendingBenignVotes(t *testing.T) {
+	config := cfg.TestConfig()
+	pks, vals, _, _, reactors := makeAndConnectReactors(config, 2)
+
+	peers := reactors[0].Switch.Peers().List()
+	require.Len(t, peers, 1)
+	src := peers[0]
+
+	pks0Bts, _ := pks[0].Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(pks0Bts)
+	eventHash := common.HexToHash("0x6f1b8c3e5a7d0f2b4c6e8a1d3f5b7c9e0a2d4f6b8c1e3a5d7f9b0c2e4a6d8f1b").Bytes()
+
+	good := Vote{
+		PubKey:    vals[0].BlsKey,
+		Signature: signVote(secKey, testEventType, eventHash),
+		EventType: testEventType,
+		EventHash: eventHash,
+	}
+	// One accepted vote, then the same vote over and over: every repeat is a
+	// duplicate the pool answers from its cache.
+	for i := 0; i <= maxInvalidVotesPerPeer; i++ {
+		receiveVote(reactors[0], src, good)
+	}
+
+	// The same rejected signature over and over: the first costs a pairing, the
+	// rest are answered from the negative cache.
+	otherHash := common.HexToHash("0xc4a7f0d3b6e9a2c5f8b1d4e7a0c3f6b9d2e5a8c1f4b7d0e3a6c9f2b5d8e1a4c7").Bytes()
+	bad := Vote{
+		PubKey:    vals[0].BlsKey,
+		Signature: make([]byte, signatureLen),
+		EventType: testEventType,
+		EventHash: otherHash,
+	}
+	for i := 0; i <= maxInvalidVotesPerPeer; i++ {
+		receiveVote(reactors[0], src, bad)
+	}
+
+	require.Equal(t, 1, reactors[0].Switch.Peers().Size(),
+		"duplicates and repeats of a known-bad signature must not drop the peer")
+}
+
+// TestVoteBudget_WindowResets pins the budget as a rate, not a lifetime total: a
+// peer with an occasional failure never accumulates its way to a disconnect.
+func TestVoteBudget_WindowResets(t *testing.T) {
+	budget := &voteBudget{}
+	start := time.Now()
+
+	for i := 0; i < maxInvalidVotesPerPeer; i++ {
+		require.False(t, budget.spend(start), "failure %d is still inside the budget", i)
+	}
+	require.True(t, budget.spend(start), "one past the budget must report over")
+
+	require.False(t, budget.spend(start.Add(invalidVoteWindow+time.Second)),
+		"the count must start again in a new window")
 }

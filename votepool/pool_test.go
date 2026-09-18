@@ -181,7 +181,8 @@ func TestPool_AddVote(t *testing.T) {
 		err := votePool.AddVote(&tc.vote)
 		if tc.err {
 			if assert.Error(t, err) {
-				assert.Equal(t, tc.msg, err.Error())
+				assert.ErrorContains(t, err, tc.msg)
+				assert.ErrorIs(t, err, ErrVoteVerification)
 			}
 		} else {
 			assert.NoError(t, err)
