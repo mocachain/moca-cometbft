@@ -12,6 +12,12 @@
   rather than `EventHash` alone. Signers must be updated in step with the chain
   and the challengers — see the PR for the rollout order
   ([\#25](https://github.com/mocachain/moca-cometbft/pull/25))
+- `[state]` validate the block transaction count against
+  `ConsensusParams.Block.MaxTxs` during block validation, matching the limit
+  `CreateProposalBlock` already applies when building a proposal; a value
+  `<= 0` still means unlimited. Requires a coordinated upgrade — every
+  validator must run the new binary before the change takes effect
+  (MOCA-976)
 
 ### IMPROVEMENTS
 
