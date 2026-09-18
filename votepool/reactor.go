@@ -37,22 +37,22 @@ const (
 	// Key for a peer's invalid-vote budget.
 	peerVoteBudgetKey = "VotePoolReactor.voteBudget"
 
-	// A peer is disconnected once this many of its votes fail verification
-	// within invalidVoteWindow. Each such vote costs a BLS pairing, and honest
-	// gossip -- one vote per validator per event -- stays far below the budget.
+	// A peer is disconnected once this many of its votes cost a BLS pairing and
+	// still fail to verify, within invalidVoteWindow. Honest gossip -- one vote
+	// per validator per event -- stays far below the budget.
 	maxInvalidVotesPerPeer = 100
 	invalidVoteWindow      = time.Minute
 )
 
-// voteBudget counts the votes from one peer that failed verification inside a
-// rolling window.
+// voteBudget counts the votes from one peer whose signature failed to verify
+// inside a rolling window.
 type voteBudget struct {
 	mtx         cmtsync.Mutex
 	count       int
 	windowStart time.Time
 }
 
-// spend records one failed vote and reports whether the peer is over budget.
+// spend records one such vote and reports whether the peer is over budget.
 func (b *voteBudget) spend(now time.Time) bool {
 	b.mtx.Lock()
 	defer b.mtx.Unlock()
@@ -181,9 +181,11 @@ func (voteR *Reactor) Receive(e p2p.Envelope) {
 		voteR.Logger.Debug("Receive vote", "vote", vote.Key(), "src", e.Src)
 		if err := voteR.votePool.AddVote(vote); err != nil {
 			voteR.Logger.Info("Could not add vote", "vote", vote.Key(), "err", err)
-			// Only verification failures are charged: those are the ones that
-			// cost a pairing. Duplicates and known-bad replays come from a cache.
-			if errors.Is(err, ErrVoteVerification) && peerVoteBudget(e.Src).spend(time.Now()) {
+			// Only a failure from the signature verifier is charged: that is
+			// the path that costs a pairing. Every cheaper rejection is one an
+			// honest peer can hit while its view of the event types or the
+			// validator set is a step ahead of ours.
+			if errors.Is(err, ErrInvalidVoteSignature) && peerVoteBudget(e.Src).spend(time.Now()) {
 				voteR.Switch.StopPeerForError(e.Src, err)
 			}
 		} else {

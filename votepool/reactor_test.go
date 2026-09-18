@@ -292,3 +292,46 @@ func TestVoteBudget_WindowResets(t *testing.T) {
 	require.False(t, budget.spend(start.Add(invalidVoteWindow+time.Second)),
 		"the count must start again in a new window")
 }
+
+// TestReactorKeepsPeerSendingCheapRejections: a rejection settled by a length
+// check or a map lookup never reaches the signature verifier, and an honest peer
+// hits one whenever its view of the event types or the validator set is a step
+// ahead of ours. Neither may spend the budget.
+func TestReactorKeepsPeerSendingCheapRejections(t *testing.T) {
+	config := cfg.TestConfig()
+	_, vals, _, _, reactors := makeAndConnectReactors(config, 2)
+
+	peers := reactors[0].Switch.Peers().List()
+	require.Len(t, peers, 1)
+	src := peers[0]
+
+	eventHash := common.HexToHash("0x0e5b8a2d7f1c4b9e6a3d0f7c2b5e8a1d4f7c0b3e6a9d2f5c8b1e4a7d0f3c6b9e").Bytes()
+	freshSig := func(n int) []byte {
+		sig := make([]byte, signatureLen)
+		binary.BigEndian.PutUint64(sig, uint64(n)+1)
+		return sig
+	}
+
+	// An event type this node does not know, as a peer one upgrade ahead would
+	// gossip: rejected by ValidateBasic.
+	unknownType := func(n int) Vote {
+		return Vote{PubKey: vals[0].BlsKey, Signature: freshSig(n), EventType: EventType(9), EventHash: eventHash}
+	}
+	// A key that is not a current validator, as validator-set skew produces:
+	// rejected by a map lookup.
+	strangerKey, _ := bls.GenerateBlsKey()
+	unknownValidator := func(n int) Vote {
+		return Vote{
+			PubKey: strangerKey.PublicKey().Marshal(), Signature: freshSig(n),
+			EventType: testEventType, EventHash: eventHash,
+		}
+	}
+
+	for i := 0; i <= maxInvalidVotesPerPeer; i++ {
+		receiveVote(reactors[0], src, unknownType(i))
+		receiveVote(reactors[0], src, unknownValidator(i))
+	}
+
+	require.Equal(t, 1, reactors[0].Switch.Peers().Size(),
+		"rejections that never reach the signature verifier must not drop the peer")
+}
