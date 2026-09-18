@@ -17,7 +17,7 @@
   `CreateProposalBlock` already applies when building a proposal; a value
   `<= 0` still means unlimited. Requires a coordinated upgrade — every
   validator must run the new binary before the change takes effect
-  (MOCA-976)
+  (MOCA-976) ([\#42](https://github.com/mocachain/moca-cometbft/pull/42))
 
 ### IMPROVEMENTS
 
