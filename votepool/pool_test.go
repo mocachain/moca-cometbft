@@ -181,7 +181,14 @@ func TestPool_AddVote(t *testing.T) {
 		err := votePool.AddVote(&tc.vote)
 		if tc.err {
 			if assert.Error(t, err) {
-				assert.Equal(t, tc.msg, err.Error())
+				assert.ErrorContains(t, err, tc.msg)
+				assert.ErrorIs(t, err, ErrVoteVerification)
+				// Only the signature failure reaches the signature verifier.
+				if tc.msg == "invalid signature" {
+					assert.ErrorIs(t, err, ErrInvalidVoteSignature)
+				} else {
+					assert.NotErrorIs(t, err, ErrInvalidVoteSignature)
+				}
 			}
 		} else {
 			assert.NoError(t, err)

@@ -221,15 +221,25 @@ func (p *Pool) OnStop() {
 	}
 }
 
+// ErrVoteVerification marks the AddVote failures that mean the sender produced a
+// vote this node cannot accept: malformed, from a key that is not a current
+// validator, or carrying a signature that does not verify.
+var ErrVoteVerification = errors.New("vote failed verification")
+
+// ErrInvalidVoteSignature is the one rejection that costs a BLS pairing to
+// reach; every other AddVote failure is settled by a length check, a map lookup
+// or a cache. It is also an ErrVoteVerification.
+var ErrInvalidVoteSignature = fmt.Errorf("%w: invalid signature", ErrVoteVerification)
+
 // AddVote implements VotePool.
 func (p *Pool) AddVote(vote *Vote) error {
 	err := vote.ValidateBasic()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %s", ErrVoteVerification, err)
 	}
 	store, ok := p.stores[vote.EventType]
 	if !ok {
-		return errors.New("unsupported event type")
+		return fmt.Errorf("%w: unsupported event type", ErrVoteVerification)
 	}
 
 	if ok = p.cache.Contains(vote.Key()); ok {
@@ -237,7 +247,7 @@ func (p *Pool) AddVote(vote *Vote) error {
 	}
 
 	if err = p.validatorVerifier.Validate(vote); err != nil {
-		return err
+		return fmt.Errorf("%w: %s", ErrVoteVerification, err)
 	}
 	// Keyed on the signature too: a later vote carrying a correct signature for
 	// the same event and key must still be accepted.
@@ -245,9 +255,11 @@ func (p *Pool) AddVote(vote *Vote) error {
 	if p.negCache.Contains(negKey) {
 		return errors.New("vote signature previously failed verification")
 	}
+	// blsVerifier.Validate reports exactly this failure, so the sentinel carries
+	// the same message the caller saw before.
 	if err = p.blsVerifier.Validate(vote); err != nil {
 		p.negCache.Add(negKey, struct{}{})
-		return err
+		return ErrInvalidVoteSignature
 	}
 
 	vote.expireAt = time.Now().Add(voteKeepAliveAfter)

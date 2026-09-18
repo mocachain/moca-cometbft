@@ -10,6 +10,7 @@ import (
 
 	"github.com/cometbft/cometbft/libs/log"
 	cmtpubsub "github.com/cometbft/cometbft/libs/pubsub"
+	cmtsync "github.com/cometbft/cometbft/libs/sync"
 	"github.com/cometbft/cometbft/p2p"
 	"github.com/cometbft/cometbft/p2p/conn"
 	"github.com/cometbft/cometbft/proto/tendermint/votepool"
@@ -32,7 +33,48 @@ const (
 	// Outbound depth in messages, matching the consensus VoteChannel that this
 	// channel already mirrors in priority.
 	voteSendQueueCapacity = 100
+
+	// Key for a peer's invalid-vote budget.
+	peerVoteBudgetKey = "VotePoolReactor.voteBudget"
+
+	// A peer is disconnected once this many of its votes cost a BLS pairing and
+	// still fail to verify, within invalidVoteWindow. Honest gossip -- one vote
+	// per validator per event -- stays far below the budget.
+	maxInvalidVotesPerPeer = 100
+	invalidVoteWindow      = time.Minute
 )
+
+// voteBudget counts the votes from one peer whose signature failed to verify
+// inside a rolling window.
+type voteBudget struct {
+	mtx         cmtsync.Mutex
+	count       int
+	windowStart time.Time
+}
+
+// spend records one such vote and reports whether the peer is over budget.
+func (b *voteBudget) spend(now time.Time) bool {
+	b.mtx.Lock()
+	defer b.mtx.Unlock()
+
+	if now.Sub(b.windowStart) > invalidVoteWindow {
+		b.windowStart = now
+		b.count = 0
+	}
+	b.count++
+	return b.count > maxInvalidVotesPerPeer
+}
+
+// peerVoteBudget returns a peer's budget. It is created on first use because a
+// peer's receive routine starts before reactors are told about it.
+func peerVoteBudget(peer p2p.Peer) *voteBudget {
+	if budget, ok := peer.Get(peerVoteBudgetKey).(*voteBudget); ok {
+		return budget
+	}
+	budget := &voteBudget{}
+	peer.Set(peerVoteBudgetKey, budget)
+	return budget
+}
 
 var eventVotePoolAdded = types.QueryForEvent(eventBusVotePoolUpdates)
 
@@ -139,6 +181,13 @@ func (voteR *Reactor) Receive(e p2p.Envelope) {
 		voteR.Logger.Debug("Receive vote", "vote", vote.Key(), "src", e.Src)
 		if err := voteR.votePool.AddVote(vote); err != nil {
 			voteR.Logger.Info("Could not add vote", "vote", vote.Key(), "err", err)
+			// Only a failure from the signature verifier is charged: that is
+			// the path that costs a pairing. Every cheaper rejection is one an
+			// honest peer can hit while its view of the event types or the
+			// validator set is a step ahead of ours.
+			if errors.Is(err, ErrInvalidVoteSignature) && peerVoteBudget(e.Src).spend(time.Now()) {
+				voteR.Switch.StopPeerForError(e.Src, err)
+			}
 		} else {
 			if cache, ok := e.Src.Get(peerVoteCacheKey).(*lru.Cache); ok {
 				// keep track of votes from the remote peer, update timestamp
