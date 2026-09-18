@@ -347,9 +347,10 @@ func createVotePoolReactor(config *cfg.Config,
 	eventBus *types.EventBus,
 	logger log.Logger,
 ) (*votepool.Reactor, votepool.VotePool, error) {
-	state, err := sm.NewStore(stateDB, sm.StoreOptions{
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
-	}).Load()
+	})
+	state, err := stateStore.Load()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -360,8 +361,18 @@ func createVotePoolReactor(config *cfg.Config,
 		}
 	}
 
+	// Lets the pool reload the set it has in state instead of relying only on
+	// the update events it happens to receive.
+	validatorSource := func() (*types.ValidatorSet, error) {
+		current, err := stateStore.Load()
+		if err != nil {
+			return nil, err
+		}
+		return current.Validators, nil
+	}
+
 	votePoolLogger := logger.With("module", "votepool")
-	votePool := votepool.NewVotePool(logger, vals, eventBus)
+	votePool := votepool.NewVotePool(logger, vals, eventBus, votepool.WithValidatorSource(validatorSource))
 	votePoolReactor := votepool.NewReactor(votePool, eventBus)
 	votePoolReactor.SetLogger(votePoolLogger)
 	return votePoolReactor, votePool, nil

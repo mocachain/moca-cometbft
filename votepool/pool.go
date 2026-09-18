@@ -166,10 +166,28 @@ type Pool struct {
 	negCache *lru.Cache
 
 	eventBus *types.EventBus // to subscribe validator update events and publish new added vote events
+
+	// validatorSource reloads the node's current validator set. Optional; when
+	// unset the pool only tracks the update events it receives.
+	validatorSource ValidatorSource
+}
+
+// ValidatorSource reports the validator set the node currently has in state.
+type ValidatorSource func() (*types.ValidatorSet, error)
+
+// PoolOption configures a Pool at construction.
+type PoolOption func(*Pool)
+
+// WithValidatorSource supplies the authoritative validator set. The pool reloads
+// from it after (re)subscribing and after an update it could not apply, so a
+// missed or rejected update cannot leave the verifier stale for the life of the
+// process.
+func WithValidatorSource(source ValidatorSource) PoolOption {
+	return func(p *Pool) { p.validatorSource = source }
 }
 
 // NewVotePool creates a Pool. The initial validators should be supplied.
-func NewVotePool(logger log.Logger, validators []*types.Validator, eventBus *types.EventBus) *Pool {
+func NewVotePool(logger log.Logger, validators []*types.Validator, eventBus *types.EventBus, options ...PoolOption) *Pool {
 	eventTypes := []EventType{ToBscCrossChainEvent, FromBscCrossChainEvent, DataAvailabilityChallengeEvent, FromOpCrossChainEvent, ToOpCrossChainEvent}
 
 	ticker := time.NewTicker(pruneVoteInterval)
@@ -193,6 +211,9 @@ func NewVotePool(logger log.Logger, validators []*types.Validator, eventBus *typ
 		eventBus:          eventBus,
 		blsVerifier:       &BlsSignatureVerifier{},
 		validatorVerifier: validatorVerifier,
+	}
+	for _, option := range options {
+		option(votePool)
 	}
 	votePool.BaseService = *service.NewBaseService(logger, "VotePool", votePool)
 
@@ -316,6 +337,8 @@ func (p *Pool) validatorUpdateRoutine() {
 			}
 			continue
 		}
+		// Updates published while unsubscribed are gone, so reload the set.
+		p.resyncValidators()
 		if resubscribe := p.consumeValidatorUpdates(sub); !resubscribe {
 			return
 		}
@@ -359,6 +382,9 @@ func (p *Pool) consumeValidatorUpdates(sub types.Subscription) bool {
 			}
 			if err := p.validatorVerifier.updateValidators(changes.ValidatorUpdates); err != nil {
 				p.Logger.Error("Validator set update applied with errors", "err", err.Error())
+				// A rejected batch is dropped whole, additions included, so
+				// reload rather than carry a stale set forward.
+				p.resyncValidators()
 			}
 			p.Logger.Info("Validators updated", "changes", changes.ValidatorUpdates)
 		case <-sub.Canceled():
@@ -367,6 +393,23 @@ func (p *Pool) consumeValidatorUpdates(sub types.Subscription) bool {
 			return false
 		}
 	}
+}
+
+// resyncValidators reloads the validator set from the configured source. It is a
+// no-op when no source is configured.
+func (p *Pool) resyncValidators() {
+	if p.validatorSource == nil {
+		return
+	}
+	set, err := p.validatorSource()
+	if err != nil {
+		p.Logger.Error("Cannot reload the validator set", "err", err.Error())
+		return
+	}
+	if set == nil {
+		return
+	}
+	p.validatorVerifier.setValidators(set)
 }
 
 // pruneVoteRoutine will prune votes at the given intervals.
