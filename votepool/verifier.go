@@ -15,53 +15,67 @@ type Verifier interface {
 }
 
 // FromValidatorVerifier will check whether the Vote is from a valid validator.
+//
+// It tracks the FULL validator set, not just the members holding a BLS key: an
+// update removing a BLS-less validator has to resolve against the same set the
+// node has, or UpdateWithChangeSet rejects the whole batch and the additions in
+// it are lost. blsKeys is the derived index used for the vote source check.
 type FromValidatorVerifier struct {
 	mtx        *sync.RWMutex
-	validators map[string]*types.Validator
+	validators *types.ValidatorSet
+	blsKeys    map[string]*types.Validator
 }
 
 func NewFromValidatorVerifier() *FromValidatorVerifier {
 	f := &FromValidatorVerifier{
-		validators: make(map[string]*types.Validator),
+		validators: &types.ValidatorSet{},
+		blsKeys:    make(map[string]*types.Validator),
 		mtx:        &sync.RWMutex{},
 	}
 	return f
 }
 
 func (f *FromValidatorVerifier) initValidators(validators []*types.Validator) {
-	for _, val := range validators {
-		if len(val.BlsKey) > 0 {
-			f.validators[string(val.BlsKey[:])] = val
-		}
-	}
+	f.setValidators(&types.ValidatorSet{Validators: validators})
+}
+
+// setValidators replaces the tracked set with a copy of set, so a later update
+// cannot mutate the caller's validators.
+func (f *FromValidatorVerifier) setValidators(set *types.ValidatorSet) {
+	f.mtx.Lock()
+	defer f.mtx.Unlock()
+
+	f.validators = set.Copy()
+	f.indexBlsKeys()
 }
 
 func (f *FromValidatorVerifier) updateValidators(changes []*types.Validator) error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 
-	vals := make([]*types.Validator, 0)
-	for _, val := range f.validators {
-		vals = append(vals, val)
-	}
-	f.validators = make(map[string]*types.Validator)
-	valSet := &types.ValidatorSet{Validators: vals}
-	// Keep whatever the set ended up with even on error (as before), but
-	// surface the failure instead of swallowing it.
-	err := valSet.UpdateWithChangeSet(changes)
-	for _, val := range valSet.Validators {
-		if len(val.BlsKey) > 0 {
-			f.validators[string(val.BlsKey[:])] = val
-		}
-	}
+	// UpdateWithChangeSet leaves the set untouched when it rejects a batch.
+	err := f.validators.UpdateWithChangeSet(changes)
+	f.indexBlsKeys()
 	return err
 }
 
-func (f *FromValidatorVerifier) lenOfValidators() int {
-	f.mtx.Lock()
-	defer f.mtx.Unlock()
+// indexBlsKeys rebuilds the BLS key index from the tracked set. Callers hold mtx.
+func (f *FromValidatorVerifier) indexBlsKeys() {
+	f.blsKeys = make(map[string]*types.Validator, len(f.validators.Validators))
+	for _, val := range f.validators.Validators {
+		if len(val.BlsKey) > 0 {
+			f.blsKeys[string(val.BlsKey[:])] = val
+		}
+	}
+}
 
-	return len(f.validators)
+// lenOfValidators reports how many validators can currently sign votes, i.e. how
+// many of them carry a BLS key.
+func (f *FromValidatorVerifier) lenOfValidators() int {
+	f.mtx.RLock()
+	defer f.mtx.RUnlock()
+
+	return len(f.blsKeys)
 }
 
 // Validate implements Verifier.
@@ -69,7 +83,7 @@ func (f *FromValidatorVerifier) Validate(vote *Vote) error {
 	f.mtx.RLock()
 	defer f.mtx.RUnlock()
 
-	if _, ok := f.validators[string(vote.PubKey[:])]; ok {
+	if _, ok := f.blsKeys[string(vote.PubKey[:])]; ok {
 		return nil
 	}
 	return errors.New("vote is not from validators")

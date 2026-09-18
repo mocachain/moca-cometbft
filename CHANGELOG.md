@@ -22,6 +22,11 @@
 
 ### BUG FIXES
 
+- `[votepool]` track the full validator set in the vote verifier, not only the
+  members that carry a BLS key, so an update removing a BLS-less validator no
+  longer fails and takes the rest of the batch with it; the pool also reloads the
+  set from state after (re)subscribing and after an update it could not apply,
+  instead of running on a stale set for the lifetime of the process
 - `[votepool]` resubscribe the per-peer vote-gossip goroutine after its
   subscription is canceled, and use `TrySend` instead of a blocking `Send`, so a
   slow peer can no longer wedge itself off vote gossip for the life of the
