@@ -295,6 +295,8 @@ func createBlocksyncReactor(config *cfg.Config,
 ) (bcReactor p2p.Reactor, err error) {
 	switch config.BlockSync.Version {
 	case "v0":
+		// Unlike the consensus reactor, block-sync is not live BFT voting, so
+		// it still honors skip_app_hash for catch-up.
 		bcReactor = blocksync.NewReactorWithAddr(state.Copy(), blockExec, blockStore, blockSync, localAddr, metrics, offlineStateSyncHeight,
 			blocksync.ReactorSkipAppHashVerify(config.BaseConfig.SkipAppHash))
 	case "v1", "v2":
