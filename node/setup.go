@@ -355,20 +355,20 @@ func createVotePoolReactor(config *cfg.Config,
 		return nil, nil, err
 	}
 	vals := make([]*types.Validator, 0)
-	if state.Validators != nil {
-		for _, val := range state.Validators.Validators {
+	if state.NextValidators != nil {
+		for _, val := range state.NextValidators.Validators {
 			vals = append(vals, val.Copy())
 		}
 	}
 
-	// Lets the pool reload the set it has in state instead of relying only on
-	// the update events it happens to receive.
+	// The update events are applied as soon as a block commits them, which is the
+	// set state keeps in NextValidators; Validators lags one update behind.
 	validatorSource := func() (*types.ValidatorSet, error) {
 		current, err := stateStore.Load()
 		if err != nil {
 			return nil, err
 		}
-		return current.Validators, nil
+		return current.NextValidators, nil
 	}
 
 	votePoolLogger := logger.With("module", "votepool")
