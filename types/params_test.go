@@ -51,6 +51,14 @@ func TestConsensusParamsValidation(t *testing.T) {
 	}
 }
 
+// TestConsensusParamsValidateBasicMaxTxsErrorText proves the block.MaxTxs
+// ValidateBasic error reports the offending MaxTxs value, not MaxGas.
+func TestConsensusParamsValidateBasicMaxTxsErrorText(t *testing.T) {
+	err := makeParams(-2, 1, 0, 2, 0, valEd25519, 0).ValidateBasic()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "-2")
+}
+
 func makeParams(
 	blockTxs, blockBytes, blockGas int64,
 	evidenceAge int64,

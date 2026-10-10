@@ -550,3 +550,57 @@ func TestValidateBlockInvalidCommit(t *testing.T) {
 		require.Contains(t, err.Error(), "commit validator not found in validator set")
 	})
 }
+
+// TestValidateBlockMaxTxs proves state/validation.go rejects a block whose
+// tx count exceeds ConsensusParams.Block.MaxTxs, mirroring the "unlimited"
+// semantics (MaxTxs <= 0) that CreateProposalBlock gets from
+// ReapMaxTxsMaxBytesMaxGas.
+func TestValidateBlockMaxTxs(t *testing.T) {
+	proxyApp := newTestApp()
+	require.NoError(t, proxyApp.Start())
+	defer proxyApp.Stop() //nolint:errcheck // ignore for tests
+
+	state, stateDB, _ := makeState(4, 1)
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
+		DiscardABCIResponses: false,
+	})
+	mp := &mpmocks.Mempool{}
+	blockStore := store.NewBlockStore(dbm.NewMemDB())
+
+	blockExec := sm.NewBlockExecutor(
+		stateStore,
+		log.TestingLogger(),
+		proxyApp.Consensus(),
+		mp,
+		sm.EmptyEvidencePool{},
+		blockStore,
+	)
+
+	height := state.InitialHeight
+	proposerAddr := state.Validators.GetProposer().Address
+	lastCommit := &types.Commit{}
+
+	// A block with more txs than MaxTxs is rejected. Pre-fix, validateBlock
+	// never checks the tx count, so this block would pass.
+	state.ConsensusParams.Block.MaxTxs = 3
+	block, err := state.MakeBlock(height, test.MakeNTxs(height, 4), lastCommit, nil, nil, proposerAddr)
+	require.NoError(t, err)
+	err = blockExec.ValidateBlock(state, block, false)
+	if assert.Error(t, err) {
+		assert.Contains(t, err.Error(), "too many txs in block")
+	}
+
+	// A block with exactly MaxTxs txs is accepted.
+	block, err = state.MakeBlock(height, test.MakeNTxs(height, 3), lastCommit, nil, nil, proposerAddr)
+	require.NoError(t, err)
+	require.NoError(t, blockExec.ValidateBlock(state, block, false))
+
+	// MaxTxs <= 0 means unlimited, matching ReapMaxTxsMaxBytesMaxGas: a
+	// block with far more txs is still accepted.
+	for _, unlimited := range []int64{-1, 0} {
+		state.ConsensusParams.Block.MaxTxs = unlimited
+		block, err = state.MakeBlock(height, test.MakeNTxs(height, 50), lastCommit, nil, nil, proposerAddr)
+		require.NoError(t, err)
+		require.NoError(t, blockExec.ValidateBlock(state, block, false), "MaxTxs=%d", unlimited)
+	}
+}

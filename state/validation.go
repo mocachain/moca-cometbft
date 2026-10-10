@@ -178,6 +178,14 @@ func validateBlock(state State, block *types.Block, opts ...func(*blockValidatio
 			block.Height, state.InitialHeight)
 	}
 
+	// Check the block doesn't exceed the configured tx count. MaxTxs <= 0
+	// means unlimited, mirroring ReapMaxTxsMaxBytesMaxGas's semantics at
+	// proposal time (see CreateProposalBlock).
+	if maxTxs := state.ConsensusParams.Block.MaxTxs; maxTxs > 0 && int64(len(block.Txs)) > maxTxs {
+		return fmt.Errorf("too many txs in block. Max %d, got %d",
+			maxTxs, len(block.Txs))
+	}
+
 	// Check evidence doesn't exceed the limit amount of bytes.
 	if max, got := state.ConsensusParams.Evidence.MaxBytes, block.Evidence.ByteSize(); got > max {
 		return types.NewErrEvidenceOverflow(max, got)
