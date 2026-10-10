@@ -2553,6 +2553,13 @@ func (cs *State) calculatePrecommitMessageDelayMetrics() {
 		return
 	}
 
+	// GetProposer returns nil for an empty validator set; every metric below is
+	// labeled by its address, so there is nothing to record without one.
+	proposer := cs.Validators.GetProposer()
+	if proposer == nil {
+		return
+	}
+
 	ps := cs.Votes.Precommits(cs.Round)
 	pl := ps.List()
 
@@ -2563,9 +2570,12 @@ func (cs *State) calculatePrecommitMessageDelayMetrics() {
 	var votingPowerSeen int64
 	for _, v := range pl {
 		_, val := cs.Validators.GetByAddress(v.ValidatorAddress)
+		if val == nil {
+			continue
+		}
 		votingPowerSeen += val.VotingPower
 		if votingPowerSeen >= cs.Validators.TotalVotingPower()*2/3+1 {
-			cs.metrics.QuorumPrecommitDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
+			cs.metrics.QuorumPrecommitDelay.With("proposer_address", proposer.Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
 			break
 		}
 	}
@@ -2573,6 +2583,13 @@ func (cs *State) calculatePrecommitMessageDelayMetrics() {
 
 func (cs *State) calculatePrevoteMessageDelayMetrics() {
 	if cs.Proposal == nil {
+		return
+	}
+
+	// GetProposer returns nil for an empty validator set; every metric below is
+	// labeled by its address, so there is nothing to record without one.
+	proposer := cs.Validators.GetProposer()
+	if proposer == nil {
 		return
 	}
 
@@ -2586,14 +2603,17 @@ func (cs *State) calculatePrevoteMessageDelayMetrics() {
 	var votingPowerSeen int64
 	for _, v := range pl {
 		_, val := cs.Validators.GetByAddress(v.ValidatorAddress)
+		if val == nil {
+			continue
+		}
 		votingPowerSeen += val.VotingPower
 		if votingPowerSeen >= cs.Validators.TotalVotingPower()*2/3+1 {
-			cs.metrics.QuorumPrevoteDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
+			cs.metrics.QuorumPrevoteDelay.With("proposer_address", proposer.Address.String()).Set(v.Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
 			break
 		}
 	}
 	if ps.HasAll() {
-		cs.metrics.FullPrevoteDelay.With("proposer_address", cs.Validators.GetProposer().Address.String()).Set(pl[len(pl)-1].Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
+		cs.metrics.FullPrevoteDelay.With("proposer_address", proposer.Address.String()).Set(pl[len(pl)-1].Timestamp.Sub(cs.Proposal.Timestamp).Seconds())
 	}
 }
 
