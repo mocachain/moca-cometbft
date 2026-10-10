@@ -840,11 +840,11 @@ func (cfg *MempoolConfig) ValidateBasic() error {
 	default:
 		return fmt.Errorf("unknown mempool type: %q", cfg.Type)
 	}
-	if cfg.Size < 0 {
-		return errors.New("size can't be negative")
+	if cfg.Size <= 0 {
+		return errors.New("size must be greater than 0")
 	}
-	if cfg.MaxTxsBytes < 0 {
-		return errors.New("max_txs_bytes can't be negative")
+	if cfg.MaxTxsBytes <= 0 {
+		return errors.New("max_txs_bytes must be greater than 0")
 	}
 	if cfg.CacheSize < 0 {
 		return errors.New("cache_size can't be negative")
