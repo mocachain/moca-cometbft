@@ -2794,3 +2794,78 @@ func TestDoubleSigning(t *testing.T) {
 		})
 	}
 }
+
+// TestCalculateMessageDelayMetricsUnknownValidatorDoesNotPanic covers
+// calculatePrecommitMessageDelayMetrics and calculatePrevoteMessageDelayMetrics
+// with a vote whose address is a member of cs.Votes' own validator set (so the
+// vote is accepted) but absent from cs.Validators (so the metrics function's
+// own lookup misses), simulating the two falling out of sync.
+func TestCalculateMessageDelayMetricsUnknownValidatorDoesNotPanic(t *testing.T) {
+	const height = int64(1)
+	const round = int32(0)
+
+	// currentValSet stands in for cs.Validators: it does not include `voter`.
+	currentValSet, _ := types.RandValidatorSet(1, testMinPower)
+
+	newCS := func(votes *cstypes.HeightVoteSet) *State {
+		cs := &State{}
+		cs.metrics = NopMetrics()
+		cs.Height = height
+		cs.Round = round
+		cs.Proposal = &types.Proposal{Timestamp: time.Now()}
+		cs.Validators = currentValSet
+		cs.Votes = votes
+		return cs
+	}
+
+	t.Run("prevote", func(t *testing.T) {
+		voteValSet, votePrivVals := types.RandValidatorSet(1, testMinPower)
+		voter := newValidatorStub(votePrivVals[0], 0)
+		voter.Height, voter.Round = height, round
+
+		hvs := cstypes.NewHeightVoteSet(test.DefaultTestChainID, height, voteValSet)
+		vote := signVote(voter, cmtproto.PrevoteType, nil, types.PartSetHeader{}, false)
+		added, err := hvs.Prevotes(round).AddVote(vote)
+		require.NoError(t, err)
+		require.True(t, added)
+
+		cs := newCS(hvs)
+		require.NotPanics(t, cs.calculatePrevoteMessageDelayMetrics)
+	})
+
+	t.Run("precommit", func(t *testing.T) {
+		voteValSet, votePrivVals := types.RandValidatorSet(1, testMinPower)
+		voter := newValidatorStub(votePrivVals[0], 0)
+		voter.Height, voter.Round = height, round
+
+		hvs := cstypes.NewExtendedHeightVoteSet(test.DefaultTestChainID, height, voteValSet)
+		vote := signVote(voter, cmtproto.PrecommitType, nil, types.PartSetHeader{}, true)
+		added, err := hvs.Precommits(round).AddVote(vote)
+		require.NoError(t, err)
+		require.True(t, added)
+
+		cs := newCS(hvs)
+		require.NotPanics(t, cs.calculatePrecommitMessageDelayMetrics)
+	})
+}
+
+// TestCalculatePrevoteMessageDelayMetricsNilProposerDoesNotPanic covers the
+// FullPrevoteDelay call site: GetProposer returns nil for an empty validator
+// set, and HasAll() is vacuously true for an empty vote set built from the
+// same empty set, reaching that call site without needing any votes.
+func TestCalculatePrevoteMessageDelayMetricsNilProposerDoesNotPanic(t *testing.T) {
+	const height = int64(1)
+	const round = int32(0)
+
+	emptyValSet := types.NewValidatorSet(nil)
+
+	cs := &State{}
+	cs.metrics = NopMetrics()
+	cs.Height = height
+	cs.Round = round
+	cs.Proposal = &types.Proposal{Timestamp: time.Now()}
+	cs.Validators = emptyValSet
+	cs.Votes = cstypes.NewHeightVoteSet(test.DefaultTestChainID, height, emptyValSet)
+
+	require.NotPanics(t, cs.calculatePrevoteMessageDelayMetrics)
+}
