@@ -350,21 +350,32 @@ func createVotePoolReactor(config *cfg.Config,
 	eventBus *types.EventBus,
 	logger log.Logger,
 ) (*votepool.Reactor, votepool.VotePool, error) {
-	state, err := sm.NewStore(stateDB, sm.StoreOptions{
+	stateStore := sm.NewStore(stateDB, sm.StoreOptions{
 		DiscardABCIResponses: config.Storage.DiscardABCIResponses,
-	}).Load()
+	})
+	state, err := stateStore.Load()
 	if err != nil {
 		return nil, nil, err
 	}
 	vals := make([]*types.Validator, 0)
-	if state.Validators != nil {
-		for _, val := range state.Validators.Validators {
+	if state.NextValidators != nil {
+		for _, val := range state.NextValidators.Validators {
 			vals = append(vals, val.Copy())
 		}
 	}
 
+	// The update events are applied as soon as a block commits them, which is the
+	// set state keeps in NextValidators; Validators lags one update behind.
+	validatorSource := func() (*types.ValidatorSet, error) {
+		current, err := stateStore.Load()
+		if err != nil {
+			return nil, err
+		}
+		return current.NextValidators, nil
+	}
+
 	votePoolLogger := logger.With("module", "votepool")
-	votePool := votepool.NewVotePool(logger, vals, eventBus)
+	votePool := votepool.NewVotePool(logger, vals, eventBus, votepool.WithValidatorSource(validatorSource))
 	votePoolReactor := votepool.NewReactor(votePool, eventBus)
 	votePoolReactor.SetLogger(votePoolLogger)
 	return votePoolReactor, votePool, nil

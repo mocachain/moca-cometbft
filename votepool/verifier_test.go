@@ -63,7 +63,7 @@ func TestVoteFromValidatorVerifier_UpdateValidators(t *testing.T) {
 	removeVal := &types.Validator{PubKey: pubKey1, Address: pubKey1.Address(), VotingPower: 0}
 	require.NoError(t, verifier.updateValidators([]*types.Validator{removeVal}))
 
-	require.Equal(t, 1, len(verifier.validators))
+	require.Equal(t, 1, verifier.lenOfValidators())
 
 	//add validator
 	pubKey3 := ed25519.GenPrivKey().PubKey()
@@ -73,7 +73,7 @@ func TestVoteFromValidatorVerifier_UpdateValidators(t *testing.T) {
 	addVal := &types.Validator{PubKey: pubKey3, Address: pubKey3.Address(), BlsKey: blsPubKey3, VotingPower: 10}
 	require.NoError(t, verifier.updateValidators([]*types.Validator{addVal}))
 
-	require.Equal(t, 2, len(verifier.validators))
+	require.Equal(t, 2, verifier.lenOfValidators())
 }
 
 func TestVoteBlsVerifier(t *testing.T) {
@@ -162,4 +162,43 @@ func TestBlsSignatureVerifier_RejectsCrossEventTypeReplay(t *testing.T) {
 		EventType: ToBscCrossChainEvent,
 		EventHash: eventHash,
 	}).Key(), "dedup key must be event-type specific")
+}
+
+// TestVoteFromValidatorVerifier_RemovalOfBlsLessValidator pins that a
+// validator-set update which removes a validator carrying no BLS key still
+// applies. types.Validator.ValidateBasic accepts an empty BlsKey, so such a
+// validator can exist; if the verifier only tracked BLS-capable validators the
+// removal would not resolve and the whole batch -- additions included -- would
+// be rejected, leaving the verifier stale from that block on.
+func TestVoteFromValidatorVerifier_RemovalOfBlsLessValidator(t *testing.T) {
+	newVal := func(withBls bool) *types.Validator {
+		pubKey := ed25519.GenPrivKey().PubKey()
+		val := &types.Validator{Address: pubKey.Address(), PubKey: pubKey, VotingPower: 10}
+		if withBls {
+			blsPrivKey, _ := bls.GenerateBlsKey()
+			val.BlsKey = blsPrivKey.PublicKey().Marshal()
+		}
+		return val
+	}
+
+	existing := newVal(true)
+	blsLess := newVal(false)
+	added := newVal(true)
+
+	verifier := NewFromValidatorVerifier()
+	verifier.initValidators([]*types.Validator{existing, blsLess})
+
+	// A single batch that drops the BLS-less validator and adds a new one.
+	changes := []*types.Validator{
+		{PubKey: blsLess.PubKey, Address: blsLess.Address, VotingPower: 0},
+		{PubKey: added.PubKey, Address: added.Address, BlsKey: added.BlsKey, VotingPower: 10},
+	}
+	require.NoError(t, verifier.updateValidators(changes),
+		"removing a validator without a BLS key must not fail the whole batch")
+
+	require.NoError(t, verifier.Validate(&Vote{PubKey: existing.BlsKey}),
+		"validator already in the set must stay known")
+	require.NoError(t, verifier.Validate(&Vote{PubKey: added.BlsKey}),
+		"validator added in the same batch must be known")
+	require.Equal(t, 2, verifier.lenOfValidators())
 }

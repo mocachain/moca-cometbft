@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/0xPolygon/polygon-edge/bls"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/cometbft/cometbft/store"
 	"github.com/cometbft/cometbft/types"
 	cmttime "github.com/cometbft/cometbft/types/time"
+	"github.com/cometbft/cometbft/votepool"
 )
 
 func TestNodeStartStop(t *testing.T) {
@@ -527,4 +529,68 @@ func state(nVals int, height int64) (sm.State, dbm.DB, []types.PrivValidator) {
 		}
 	}
 	return s, stateDB, privVals
+}
+
+// The vote pool follows the validator-set events a commit publishes, which state
+// records in NextValidators, so it must seed and reload from that set.
+func TestVotePoolUsesNextValidators(t *testing.T) {
+	config := test.ResetTestRoot("node_votepool_next_validators")
+	defer os.RemoveAll(config.RootDir)
+
+	currentPub := ed25519.GenPrivKey().PubKey()
+	genesisState, err := sm.MakeGenesisState(&types.GenesisDoc{
+		ChainID:    "test-chain",
+		Validators: []types.GenesisValidator{{Address: currentPub.Address(), PubKey: currentPub, Power: 1000, Name: "current"}},
+	})
+	require.NoError(t, err)
+
+	blsPrivKey, err := bls.GenerateBlsKey()
+	require.NoError(t, err)
+	joinerPub := ed25519.GenPrivKey().PubKey()
+	joiner := &types.Validator{Address: joinerPub.Address(), PubKey: joinerPub, BlsKey: blsPrivKey.PublicKey().Marshal(), VotingPower: 1000}
+	withJoiner := types.NewValidatorSet(append(genesisState.Validators.Copy().Validators, joiner))
+
+	joinerVote := func() *votepool.Vote {
+		vote := &votepool.Vote{PubKey: joiner.BlsKey, EventType: votepool.FromBscCrossChainEvent, EventHash: cmtrand.Bytes(32)}
+		sig, err := blsPrivKey.Sign(vote.SignBytes(), votepool.DST)
+		require.NoError(t, err)
+		vote.Signature, err = sig.Marshal()
+		require.NoError(t, err)
+		return vote
+	}
+
+	eventBus := types.NewEventBus()
+	require.NoError(t, eventBus.Start())
+	defer func() { _ = eventBus.Stop() }()
+
+	t.Run("seed", func(t *testing.T) {
+		state := genesisState.Copy()
+		state.NextValidators = withJoiner
+		stateDB := dbm.NewMemDB()
+		require.NoError(t, sm.NewStore(stateDB, sm.StoreOptions{}).Save(state))
+
+		_, votePool, err := createVotePoolReactor(config, stateDB, eventBus, log.TestingLogger())
+		require.NoError(t, err)
+		require.NoError(t, votePool.AddVote(joinerVote()))
+	})
+
+	t.Run("reload", func(t *testing.T) {
+		stateDB := dbm.NewMemDB()
+		stateStore := sm.NewStore(stateDB, sm.StoreOptions{})
+		require.NoError(t, stateStore.Save(genesisState))
+
+		_, votePool, err := createVotePoolReactor(config, stateDB, eventBus, log.TestingLogger())
+		require.NoError(t, err)
+		require.Error(t, votePool.AddVote(joinerVote()))
+
+		state := genesisState.Copy()
+		state.LastBlockHeight++
+		state.LastValidators = state.Validators.Copy()
+		state.NextValidators = withJoiner
+		require.NoError(t, stateStore.Save(state))
+
+		require.NoError(t, votePool.Start())
+		defer func() { _ = votePool.Stop() }()
+		require.Eventually(t, func() bool { return votePool.AddVote(joinerVote()) == nil }, 10*time.Second, 100*time.Millisecond)
+	})
 }

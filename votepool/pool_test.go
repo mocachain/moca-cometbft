@@ -2,6 +2,7 @@ package votepool
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -472,4 +473,121 @@ func TestPool_VotesWithSameHashDifferentEventTypeBothStored(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, 1,
 		"a vote sharing (EventHash, PubKey) with another event type must not be dropped as a duplicate")
+}
+
+// TestPool_BlsLessValidatorRemovalKeepsAdditions drives the same defect through
+// the Pool's live update path. One batch removes a validator that carries no BLS
+// key and adds a new BLS validator; the addition must not be lost with it.
+func TestPool_BlsLessValidatorRemovalKeepsAdditions(t *testing.T) {
+	blsPrivKey1, _ := bls.GenerateBlsKey()
+	pubKey1 := ed25519.GenPrivKey().PubKey()
+	val1 := &types.Validator{
+		Address: pubKey1.Address(), PubKey: pubKey1,
+		BlsKey: blsPrivKey1.PublicKey().Marshal(), VotingPower: 10,
+	}
+
+	// types.Validator.ValidateBasic accepts an empty BlsKey, so this is a
+	// legitimate member of the set that the verifier never holds a key for.
+	pubKey2 := ed25519.GenPrivKey().PubKey()
+	blsLess := &types.Validator{Address: pubKey2.Address(), PubKey: pubKey2, VotingPower: 10}
+
+	blsPrivKey3, _ := bls.GenerateBlsKey()
+	pubKey3 := ed25519.GenPrivKey().PubKey()
+	added := &types.Validator{
+		Address: pubKey3.Address(), PubKey: pubKey3,
+		BlsKey: blsPrivKey3.PublicKey().Marshal(), VotingPower: 10,
+	}
+
+	eventBus := types.NewEventBus()
+	require.NoError(t, eventBus.Start())
+	votePool := NewVotePool(log.TestingLogger(), []*types.Validator{val1, blsLess}, eventBus)
+	require.NoError(t, votePool.Start())
+	t.Cleanup(func() { _ = votePool.Stop(); _ = eventBus.Stop() })
+
+	update := types.EventDataValidatorSetUpdates{ValidatorUpdates: []*types.Validator{
+		{PubKey: blsLess.PubKey, Address: blsLess.Address, VotingPower: 0},
+		{PubKey: added.PubKey, Address: added.Address, BlsKey: added.BlsKey, VotingPower: 10},
+	}}
+	requireValidatorCount(t, votePool, eventBus, update, 2,
+		"the addition was dropped together with the removal of the BLS-less validator")
+
+	privBts, _ := blsPrivKey3.Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(privBts)
+	eventHash := common.HexToHash("0x5c2f8b1d4a7e0c3f6b9d2a5e8c1f4b7d0a3e6c9f2b5d8a1c4e7f0b3d6a9c2e5f").Bytes()
+	vote := Vote{
+		PubKey:    added.BlsKey,
+		Signature: signVote(secKey, FromBscCrossChainEvent, eventHash),
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.NoError(t, votePool.AddVote(&vote),
+		"a vote from the validator added in that batch must be accepted")
+}
+
+// TestPool_ResyncsValidatorsAfterFailedUpdate pins the other half of the fix: an
+// update the verifier cannot apply must not leave it stale. The pool reloads the
+// set the node has in state, so a validator that joined while the pool was out
+// of step is still recognized.
+func TestPool_ResyncsValidatorsAfterFailedUpdate(t *testing.T) {
+	newVal := func() (*bls.PrivateKey, *types.Validator) {
+		blsPrivKey, _ := bls.GenerateBlsKey()
+		pubKey := ed25519.GenPrivKey().PubKey()
+		return blsPrivKey, &types.Validator{
+			Address: pubKey.Address(), PubKey: pubKey,
+			BlsKey: blsPrivKey.PublicKey().Marshal(), VotingPower: 10,
+		}
+	}
+
+	_, val1 := newVal()
+	_, val2 := newVal()
+	_, val3 := newVal()
+	joinerKey, joiner := newVal()
+	_, stranger := newVal() // never a member, so removing it is always rejected
+
+	var mtx sync.Mutex
+	inState := types.NewValidatorSet([]*types.Validator{val1, val2, val3})
+	setState := func(vals ...*types.Validator) {
+		mtx.Lock()
+		defer mtx.Unlock()
+		inState = types.NewValidatorSet(vals)
+	}
+	source := func() (*types.ValidatorSet, error) {
+		mtx.Lock()
+		defer mtx.Unlock()
+		return inState, nil
+	}
+
+	eventBus := types.NewEventBus()
+	require.NoError(t, eventBus.Start())
+	votePool := NewVotePool(log.TestingLogger(), []*types.Validator{val1, val2, val3}, eventBus,
+		WithValidatorSource(source))
+	require.NoError(t, votePool.Start())
+	t.Cleanup(func() { _ = votePool.Stop(); _ = eventBus.Stop() })
+
+	// An update the pool can apply, so the rest of the test runs against a pool
+	// that is demonstrably subscribed and consuming.
+	setState(val1, val2)
+	requireValidatorCount(t, votePool, eventBus, removeValidatorUpdate(val3), 2,
+		"pool never applied a validator update, so it was never subscribed")
+
+	// State moves on without the pool applying the corresponding update; only a
+	// reload can take it from two validators to three.
+	setState(val1, val2, joiner)
+	badUpdate := types.EventDataValidatorSetUpdates{ValidatorUpdates: []*types.Validator{
+		{PubKey: stranger.PubKey, Address: stranger.Address, VotingPower: 0},
+	}}
+	requireValidatorCount(t, votePool, eventBus, badUpdate, 3,
+		"the pool never reloaded the validator set after an update it could not apply")
+
+	privBts, _ := joinerKey.Marshal()
+	secKey, _ := bls.UnmarshalPrivateKey(privBts)
+	eventHash := common.HexToHash("0x8d3f6a9c2e5b8d1f4a7c0e3b6d9f2a5c8e1b4d7f0a3c6e9b2d5f8a1c4e7b0d3f").Bytes()
+	vote := Vote{
+		PubKey:    joiner.BlsKey,
+		Signature: signVote(secKey, FromBscCrossChainEvent, eventHash),
+		EventType: FromBscCrossChainEvent,
+		EventHash: eventHash,
+	}
+	require.NoError(t, votePool.AddVote(&vote),
+		"a vote from the validator picked up by the reload must be accepted")
 }
