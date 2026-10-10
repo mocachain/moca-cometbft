@@ -295,6 +295,8 @@ func createBlocksyncReactor(config *cfg.Config,
 ) (bcReactor p2p.Reactor, err error) {
 	switch config.BlockSync.Version {
 	case "v0":
+		// Unlike the consensus reactor, block-sync is not live BFT voting, so
+		// it still honors skip_app_hash for catch-up.
 		bcReactor = blocksync.NewReactorWithAddr(state.Copy(), blockExec, blockStore, blockSync, localAddr, metrics, offlineStateSyncHeight,
 			blocksync.ReactorSkipAppHashVerify(config.BaseConfig.SkipAppHash))
 	case "v1", "v2":
@@ -334,7 +336,8 @@ func createConsensusReactor(config *cfg.Config,
 	if privValidator != nil {
 		consensusState.SetPrivValidator(privValidator)
 	}
-	consensusReactor := cs.NewReactor(consensusState, waitSync, cs.ReactorMetrics(csMetrics), cs.ReactorSkipAppHashVerify(config.BaseConfig.SkipAppHash))
+	// skip_app_hash is for handshake replay only; live consensus must always verify AppHash.
+	consensusReactor := cs.NewReactor(consensusState, waitSync, cs.ReactorMetrics(csMetrics))
 	consensusReactor.SetLogger(consensusLogger)
 	// services which will be publishing and/or subscribing for messages (events)
 	// consensusReactor will set it on consensusState and blockExecutor

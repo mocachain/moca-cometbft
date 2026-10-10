@@ -1030,6 +1030,12 @@ func ReactorSkipAppHashVerify(skipAppHashVerify bool) ReactorOption {
 	return func(conR *Reactor) { conR.skipAppHashVerify = skipAppHashVerify }
 }
 
+// SkipAppHashVerify reports whether the reactor was constructed with AppHash
+// verification disabled. Exposed for tests.
+func (conR *Reactor) SkipAppHashVerify() bool {
+	return conR.skipAppHashVerify
+}
+
 //-----------------------------------------------------------------------------
 
 var (
