@@ -138,6 +138,20 @@ func TestNodeSetAppVersion(t *testing.T) {
 	assert.Equal(t, n.nodeInfo.(p2p.DefaultNodeInfo).ProtocolVersion.App, appVersion)
 }
 
+// skip_app_hash is meant for handshake replay only. An operator setting it in
+// config.toml (e.g. during an upgrade) must not also disable AppHash
+// verification in the live consensus reactor.
+func TestConsensusReactorNeverSkipsAppHash(t *testing.T) {
+	config := test.ResetTestRoot("node_skip_app_hash_test")
+	defer os.RemoveAll(config.RootDir)
+	config.BaseConfig.SkipAppHash = true
+
+	n, err := DefaultNewNode(config, log.TestingLogger())
+	require.NoError(t, err)
+
+	assert.False(t, n.ConsensusReactor().SkipAppHashVerify())
+}
+
 func TestPprofServer(t *testing.T) {
 	config := test.ResetTestRoot("node_pprof_test")
 	defer os.RemoveAll(config.RootDir)

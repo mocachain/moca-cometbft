@@ -22,6 +22,12 @@
 
 ### BUG FIXES
 
+- `[consensus]` scope the `skip_app_hash` config knob to handshake replay
+  only; it no longer changes AppHash checking in the live consensus reactor
+  ([\#37](https://github.com/mocachain/moca-cometbft/pull/37))
+- `[config]` reject a `mempool.size` or `mempool.max_txs_bytes` of `0` in
+  `ValidateBasic`, matching the existing negative-value check
+  ([\#38](https://github.com/mocachain/moca-cometbft/pull/38))
 - `[consensus]` guard the prevote/precommit delay metrics against a missing
   validator or proposer lookup in the current validator set
   ([\#39](https://github.com/mocachain/moca-cometbft/pull/39))

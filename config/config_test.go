@@ -131,10 +131,27 @@ func TestMempoolConfigValidateBasic(t *testing.T) {
 	for _, fieldName := range fieldsToTest {
 		reflect.ValueOf(cfg).Elem().FieldByName(fieldName).SetInt(-1)
 		assert.Error(t, cfg.ValidateBasic())
-		reflect.ValueOf(cfg).Elem().FieldByName(fieldName).SetInt(0)
+		// Reset to a valid positive value (Size and MaxTxsBytes reject 0 too; see
+		// TestMempoolConfigValidateBasicRejectsZeroSizeAndMaxTxsBytes below).
+		reflect.ValueOf(cfg).Elem().FieldByName(fieldName).SetInt(1)
 	}
 
 	reflect.ValueOf(cfg).Elem().FieldByName("Type").SetString("invalid")
+	assert.Error(t, cfg.ValidateBasic())
+}
+
+// A mempool with Size or MaxTxsBytes set to 0 accepts no transactions
+// (mempool.CListMempool.isFull treats 0 as "always full"), so ValidateBasic
+// must reject 0, not just negative values.
+func TestMempoolConfigValidateBasicRejectsZeroSizeAndMaxTxsBytes(t *testing.T) {
+	cfg := config.TestMempoolConfig()
+	require.NoError(t, cfg.ValidateBasic())
+
+	cfg.MaxTxsBytes = 0
+	assert.Error(t, cfg.ValidateBasic())
+	cfg.MaxTxsBytes = config.TestMempoolConfig().MaxTxsBytes
+
+	cfg.Size = 0
 	assert.Error(t, cfg.ValidateBasic())
 }
 
