@@ -72,6 +72,10 @@
   send; the negative cache covers repeats of a signature, not a stream of fresh
   ones. Rejections settled before the signature verifier -- an unknown event
   type, or a key that is not a current validator -- are not counted
+- `[mempool]` acquire the exclusive update lock in `Flush` (it mutates mempool
+  state -- the tx list, the cache and the byte counter), rather than a read
+  lock, matching upstream CometBFT v1.x/main (MOCA-857)
+  ([\#43](https://github.com/mocachain/moca-cometbft/pull/43))
 
 ### IMPROVEMENTS
 
