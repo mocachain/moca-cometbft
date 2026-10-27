@@ -12,11 +12,14 @@ import (
 const (
 	fieldMessageTxs = 1 // Message.sum: `Txs txs = 1`
 	fieldTxsEntry   = 1 // Txs: `repeated bytes txs = 1`
+
+	maxTxsPerMessage = 1024
 )
 
 var (
 	errNoTransactions   = errors.New("mempool message contains no transactions")
 	errEmptyTransaction = errors.New("mempool batch contains an empty transaction")
+	errTooManyTxs       = errors.New("mempool message carries too many transactions")
 )
 
 // batchTally accumulates what has been seen so far while scanning a batch.
@@ -43,6 +46,7 @@ type batchTally struct {
 //  4. Per-batch bound: the sum of all transaction sizes may not exceed
 //     max(maxTxBytes, maxBatchBytes).
 //  5. Non-empty message: the message must carry at least one transaction.
+//  6. Per-message count bound: at most maxTxsPerMessage transactions.
 func filterMempoolMsgBytes(msgBytes []byte, maxTxBytes, maxBatchBytes int) error {
 	batchBudget := max(maxTxBytes, maxBatchBytes)
 	var tally batchTally
@@ -120,6 +124,10 @@ func applyRules(tx []byte, maxTxBytes, batchBudget int, tally *batchTally) error
 
 	tally.count++
 	tally.totalBytes += len(tx)
+
+	if tally.count > maxTxsPerMessage {
+		return errTooManyTxs
+	}
 
 	// The sum of all transaction sizes may not exceed the batch budget.
 	if batchBudget > 0 && tally.totalBytes > batchBudget {

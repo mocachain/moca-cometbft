@@ -16,9 +16,6 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// MempoolPacketChannelSize bounds the async recv/checkTx queues. Memory is depth
-// x max envelope, so keep it small enough that the blocking receive backpressures
-// before a peer can exhaust memory; the serial drain needs no more.
 var MempoolPacketChannelSize = 1024
 
 // Reactor implements MsgBytesFilter
@@ -33,7 +30,6 @@ type Reactor struct {
 	mempool *CListMempool
 	ids     *mempoolIDs
 
-	recvCh    chan p2p.Envelope
 	checkTxCh chan CheckTxRequest
 	// Semaphores to keep track of how many connections to peers are active for broadcasting
 	// transactions. Each semaphore has a capacity that puts an upper bound on the number of
@@ -48,7 +44,6 @@ func NewReactor(config *cfg.MempoolConfig, cMempool *CListMempool) *Reactor {
 		config:    config,
 		mempool:   cMempool,
 		ids:       newMempoolIDs(),
-		recvCh:    make(chan p2p.Envelope, MempoolPacketChannelSize),
 		checkTxCh: make(chan CheckTxRequest, MempoolPacketChannelSize),
 	}
 	memR.BaseReactor = *p2p.NewBaseReactor("Mempool", memR)
@@ -75,7 +70,6 @@ func (memR *Reactor) OnStart() error {
 	if !memR.config.Broadcast {
 		memR.Logger.Info("Tx broadcasting is disabled")
 	}
-	go memR.receiveRoutine()
 	go memR.checkTxRoutine()
 	return nil
 }
@@ -161,51 +155,41 @@ func (memR *Reactor) FilterMsgBytes(chID byte, _ p2p.Peer, msgBytes []byte) erro
 // It adds any received transactions to the mempool.
 func (memR *Reactor) Receive(e p2p.Envelope) {
 	memR.Logger.Debug("Receive", "src", e.Src, "chId", e.ChannelID, "msg", e.Message)
-	memR.recvCh <- e
+	switch msg := e.Message.(type) {
+	case *protomem.Txs:
+		protoTxs := msg.GetTxs()
+		if len(protoTxs) == 0 {
+			memR.Logger.Error("received empty txs from peer", "src", e.Src)
+			return
+		}
+		txInfo := TxInfo{SenderID: memR.ids.GetForPeer(e.Src)}
+		if e.Src != nil {
+			txInfo.SenderP2PID = e.Src.ID()
+		}
 
-	// broadcasting happens from go routines per peer
-}
-
-func (memR *Reactor) receiveRoutine() {
-	errChan := make(chan error, 1)
-	defer close(errChan)
-	for e := range memR.recvCh {
-		switch msg := e.Message.(type) {
-		case *protomem.Txs:
-			protoTxs := msg.GetTxs()
-			if len(protoTxs) == 0 {
-				memR.Logger.Error("received empty txs from peer", "src", e.Src)
-				continue
-			}
-			txInfo := TxInfo{SenderID: memR.ids.GetForPeer(e.Src)}
-			if e.Src != nil {
-				txInfo.SenderP2PID = e.Src.ID()
-			}
-
-			for _, tx := range protoTxs {
-				ntx := types.Tx(tx)
-
-				memR.checkTxCh <- CheckTxRequest{Tx: ntx, TxInfo: txInfo, Err: errChan}
-				err := <-errChan
-				if err != nil {
-					switch {
-					case errors.Is(err, ErrTxInCache):
-						memR.Logger.Debug("Tx already exists in cache", "tx", ntx.String())
-					case errors.As(err, &ErrMempoolIsFull{}):
-						// using debug level to avoid flooding when traffic is high
-						memR.Logger.Debug(err.Error())
-					default:
-						memR.Logger.Info("Could not check tx", "tx", ntx.String(), "err", err)
-					}
+		for _, tx := range protoTxs {
+			ntx := types.Tx(tx)
+			err := memR.mempool.CheckTx(ntx, nil, txInfo)
+			if err != nil {
+				switch {
+				case errors.Is(err, ErrTxInCache):
+					memR.Logger.Debug("Tx already exists in cache", "tx", ntx.String())
+				case errors.As(err, &ErrMempoolIsFull{}):
+					// using debug level to avoid flooding when traffic is high
+					memR.Logger.Debug(err.Error())
+				default:
+					memR.Logger.Info("Could not check tx", "tx", ntx.String(), "err", err)
 				}
 			}
-
-		default:
-			memR.Logger.Error("unknown message type", "src", e.Src, "chId", e.ChannelID, "msg", e.Message)
-			memR.Switch.StopPeerForError(e.Src, fmt.Errorf("mempool cannot handle message of type: %T", e.Message))
-			continue
 		}
+
+	default:
+		memR.Logger.Error("unknown message type", "src", e.Src, "chId", e.ChannelID, "msg", e.Message)
+		memR.Switch.StopPeerForError(e.Src, fmt.Errorf("mempool cannot handle message of type: %T", e.Message))
+		return
 	}
+
+	// broadcasting happens from go routines per peer
 }
 
 // checkTxRoutine checks the validity of a tx and sends the result to the given callback.

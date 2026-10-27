@@ -159,3 +159,19 @@ func TestReactorFilterMsgBytes_ChannelGuard(t *testing.T) {
 	// Mempool channel with abusive payload: rejected.
 	assert.Error(t, r.FilterMsgBytes(MempoolChannel, nil, bad))
 }
+
+func TestFilterMempoolMsgBytes_TxCountCap(t *testing.T) {
+	oneByteTxs := func(n int) [][]byte {
+		txs := make([][]byte, n)
+		for i := range txs {
+			txs[i] = []byte{0x01}
+		}
+		return txs
+	}
+
+	atCap := marshalTxsMsg(t, oneByteTxs(maxTxsPerMessage))
+	require.NoError(t, filterMempoolMsgBytes(atCap, 0, 0))
+
+	overCap := marshalTxsMsg(t, oneByteTxs(maxTxsPerMessage+1))
+	require.ErrorIs(t, filterMempoolMsgBytes(overCap, 0, 0), errTooManyTxs)
+}
