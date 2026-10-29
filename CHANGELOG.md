@@ -21,6 +21,10 @@
 
 ### IMPROVEMENTS
 
+- `[mempool]` run `CheckTx` for gossiped transactions on each peer's own
+  receive routine, as upstream does, and remove the fork's shared receive
+  queue; also bound the number of transactions a single mempool message may
+  carry (MOCA-2195) ([\#44](https://github.com/mocachain/moca-cometbft/pull/44))
 - `[votepool]` give the vote gossip channel an explicit `SendQueueCapacity`,
   matching the consensus `VoteChannel`, so a slow peer no longer blocks the
   per-peer broadcast goroutine on the default queue depth of 1
